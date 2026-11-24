@@ -41,10 +41,11 @@ final class PlaybackDiagnostics {
             guard line.hasPrefix("["),
                   let close1 = line.firstIndex(of: "]") else { continue }
             let time = String(line[line.index(after: line.startIndex)..<close1])
-            let rest = line[line.index(after: close1)...]
+            var rest = line[line.index(after: close1)...].drop(while: { $0 == " " })
             guard rest.hasPrefix("["), let close2 = rest.firstIndex(of: "]") else { continue }
             let category = String(rest[rest.index(after: rest.startIndex)..<close2])
-            let message = String(rest[rest.index(after: close2)...]).trimmingCharacters(in: .whitespaces)
+            rest = rest[rest.index(after: close2)...].drop(while: { $0 == " " })
+            let message = String(rest).trimmingCharacters(in: .whitespaces)
             entries.append(DiagnosticEntry(time: time, category: category, message: message))
         }
         if entries.count > maxEntries { entries.removeFirst(entries.count - maxEntries) }

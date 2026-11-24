@@ -236,6 +236,8 @@ final class PlayerService: ObservableObject {
     }
 
     private init() {
+        // 触发诊断日志系统初始化（启动时写一条就绪记录）。
+        _ = PlaybackDiagnostics.shared
         engine.actionAtItemEnd = .pause
         sleepTimer.onDeadlineReached = { [weak self] in
             self?.pause()
@@ -364,6 +366,7 @@ final class PlayerService: ObservableObject {
     ///   playing an ad-hoc selection (search results, a single track) omit it.
     func play(tracks: [Track], source: PlaySource, startAt track: Track? = nil,
               context: PlayContext? = nil) {
+        PlaybackDiagnostics.shared.log("播放", "play(tracks) \(tracks.count)首 source=\(source)")
         guard !tracks.isEmpty else { return }
         if let context { recordRecent(context) }
         isFMMode = false
@@ -401,6 +404,7 @@ final class PlayerService: ObservableObject {
 
     func togglePlayPause() {
         guard let track = currentTrack else { return }
+        PlaybackDiagnostics.shared.log("播放", "togglePlayPause《\(track.name)》当前\(isPlaying ? "播放中" : "暂停")")
         if isPlaying {
             pause()
             return
@@ -637,6 +641,7 @@ final class PlayerService: ObservableObject {
     // MARK: - Advancing
 
     private func advanceToNext(userInitiated: Bool) {
+        PlaybackDiagnostics.shared.log("播放", "advanceToNext user=\(userInitiated)")
         if usesOfflineQueue, !nextCandidates().isEmpty {
             pendingAutoAdvance = !userInitiated
             advanceOffline()
@@ -699,6 +704,7 @@ final class PlayerService: ObservableObject {
 
     private func startPlaying(_ track: Track,
                               localLease: OfflinePlaybackLease? = nil, resumeAt: TimeInterval = 0) {
+        PlaybackDiagnostics.shared.log("播放", "startPlaying《\(track.name)》id=\(track.id)")
         offlineScan?.cancel()
         offlineScan = nil
         offlineScanID = UUID()
@@ -764,11 +770,14 @@ final class PlayerService: ObservableObject {
         let quality = SettingsManager.shared.audioQuality.rawValue
         let allowsUnblock = SettingsManager.shared.canResolveUnblockedTracks
         let cacheEnabled = SettingsManager.shared.enableAudioCache && !skipsLocalCopies
+        let diag = PlaybackDiagnostics.shared
+        diag.log("解析", "开始《\(track.name)》id=\(track.id) 音质=\(quality) 登录=\(AccountStore.shared.isLoggedIn)")
         lastResolveFailure = nil
         lastRefusalCode = nil
 
         // A downloaded copy beats the network, and is all there is without one.
         if !skipsLocalCopies, let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
+            diag.log("播放", "《\(track.name)》命中离线下载")
             await playOfflineFile(lease, for: track, generation: generation, resumeAt: resumeAt)
             return
         }
@@ -830,6 +839,7 @@ final class PlayerService: ObservableObject {
             if !(error is CancellationError) {
                 lastResolveFailure = error.localizedDescription
                 Self.resolveLog.error("Playback URL for \(track.id) failed: \(String(describing: error))")
+                diag.log("官方", "《\(track.name)》失败: \(error.localizedDescription)")
             }
             // A download covers a request that died on the network. Anything
             // else goes on below: a cached copy, then third-party sources.
@@ -852,8 +862,12 @@ final class PlayerService: ObservableObject {
         var resolvedURL: URL?
         if let urlString = data?.url {
             resolvedURL = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
+            diag.log("官方", "《\(track.name)》拿到URL code=\(data?.code ?? 0)")
         } else if let code = data?.code, code != 200 {
             lastRefusalCode = code
+            diag.log("官方", "《\(track.name)》拒绝 code=\(code)")
+        } else {
+            diag.log("官方", "《\(track.name)》无URL")
         }
 
         // The service refused, or offers only a trial: a copy already cached,
@@ -866,17 +880,42 @@ final class PlayerService: ObservableObject {
         }
         guard generation == resolveGeneration else { return }
 
-        // The service refused — try third-party sources (unblock-style).
+        // 官方拒绝/试听 → 先用用户导入的 LX 自定义音源（能解析 VIP/风控歌），
+        // 再退回内置解锁源。风控是账号/IP 级，与 VIP 无关，按结果判断。
+        if resolvedURL == nil || data?.freeTrialInfo != nil {
+            lastResolveFailure = nil
+            let lxQuality = LXSourceManager.lxQuality(for: quality)
+            diag.log("兜底", "《\(track.name)》进入音源兜底")
+            if let lx = await LXSourceManager.shared.resolve(track: track, quality: lxQuality) {
+                diag.log("兜底", "《\(track.name)》LX成功 platform=\(lx.sourceName) host=\(lx.url.host() ?? "?")")
+                unblockSource = "LX·\(lx.sourceName)"
+                servedQuality = nil
+                isTrial = false
+                let result = await loadResolvedURL(track, url: lx.url, durationMS: nil,
+                                                   generation: generation, resumeAt: resumeAt)
+                if case .loaded = result { return }
+                // URL 加载失败（可能是死链），清掉标记继续试其它源
+                unblockSource = nil
+            } else {
+                diag.log("兜底", "《\(track.name)》LX全部失败")
+            }
+        }
+        guard generation == resolveGeneration else { return }
+
+        // The service refused — try built-in third-party sources (kugou/kuwo/pyncmd).
         if resolvedURL == nil || data?.freeTrialInfo != nil, allowsUnblock {
+            diag.log("兜底", "《\(track.name)》尝试内置解锁源")
             if await resolveAndLoadUnblocked(track, generation: generation, resumeAt: resumeAt) { return }
         }
         guard generation == resolveGeneration else { return }
 
         // The cache was already searched above, before third-party sources.
         guard let url = resolvedURL else {
+            diag.log("解析", "《\(track.name)》全部音源失败，将跳过")
             handleUnplayable(track)
             return
         }
+        diag.log("解析", "《\(track.name)》使用官方URL播放")
 
         servedQuality = data?.level
         if data?.freeTrialInfo != nil {
@@ -930,6 +969,7 @@ final class PlayerService: ObservableObject {
 
     private func handleUnplayable(_ track: Track) {
         consecutiveFailures += 1
+        PlaybackDiagnostics.shared.log("播放", "跳过《\(track.name)》id=\(track.id)")
         let reason = lastResolveFailure
             ?? track.playability(privilege: nil,
                                  isLoggedIn: AccountStore.shared.isLoggedIn,
