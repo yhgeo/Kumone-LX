@@ -377,8 +377,10 @@ public struct IOSMainWindow: View {
     }
 }
 
-enum IOSTab: Hashable, CaseIterable {
+enum IOSTab: Hashable, CaseIterable, Identifiable {
     case home, explore, fm, search, library
+
+    var id: String { stableKey }
 
     /// 稳定字符串标识，用于设置里持久化隐藏状态。
     var stableKey: String {
