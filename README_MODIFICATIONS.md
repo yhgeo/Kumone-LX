@@ -99,3 +99,8 @@
 - **播放日志漏记根因**：此前只埋在 resolveAndLoad；mini player 点播放走 `togglePlayPause → engine.resume/play`，不经 resolveAndLoad，所以完全没记录。现在顶层必经入口 play(tracks:)/startPlaying/togglePlayPause 全部埋点，任何播放动作都留痕。
 - **测试提速**：超时 3s→2s；先测 320k/128k，两档都失败即判不可用、跳过 flac/flac24bit；固定 300ms 等待改轮询 150ms。17 音源从约 6 分钟大幅缩短。
 - **测试结果入列表**：每个音源行直接显示 ✓/✗、耗时、各音质结果，不必点开弹窗。
+
+## 九次修复（2026-11-25）
+
+- **日志仍不记录播放的根治**：此前用 JSON 整文件反复重写，高并发下后写覆盖先写。改为**追加式文本日志**（每条 FileHandle append 到 playback-diagnostics.txt），不再丢条目；导出直接读内存+文本。
+- **全播放入口埋点**：play(tracks:)/playTrack/startPlaying/togglePlayPause/advanceToNext/playLocalFile/resolveAndLoad 全部记录，任何播放/切歌/恢复/跳过动作都必留痕。
