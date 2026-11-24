@@ -79,7 +79,17 @@ struct DailySongsView: View {
 
             Spacer(minLength: 8)
 
-            playAllButton
+            VStack(spacing: 8) {
+                playAllButton
+                #if os(iOS)
+                NavigationLink(value: Destination.dailyArchive) {
+                    Label("推荐历史", systemImage: "calendar.badge.clock")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                }
+                .buttonStyle(.plain)
+                #endif
+            }
         }
     }
 

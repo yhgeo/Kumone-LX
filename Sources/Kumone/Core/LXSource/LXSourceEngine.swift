@@ -67,6 +67,10 @@ final class LXSourceEngine {
     /// native setTimeout 计时器，防止被 GC。
     private var timers: [Int32: DispatchWorkItem] = [:]
     private var timerCounter: Int32 = 0
+    /// 最近一次脚本执行/解析的详细错误，供可用性测试与诊断展示。
+    private(set) var lastDiagnostic: String = ""
+    /// 最近一次脚本 evaluate 是否抛异常。
+    private(set) var lastScriptError: String?
 
     init() {
         let cfg = URLSessionConfiguration.ephemeral
@@ -88,6 +92,7 @@ final class LXSourceEngine {
         ctx.exceptionHandler = { [weak self] _, value in
             let msg = value?.toString() ?? "unknown JS exception"
             self?.log.error("JS exception: \(msg, privacy: .public)")
+            self?.lastScriptError = msg
         }
 
         // console：只取第一个参数转字符串，足够脚本调试用
@@ -247,8 +252,13 @@ final class LXSourceEngine {
             queue.async {
                 self.requestHandlers.removeAll()
                 self.capabilities.removeAll()
+                self.lastScriptError = nil
                 self.installShim()
                 self.context?.evaluateScript(raw)
+                let plats = Array(self.capabilities.keys).sorted()
+                self.lastDiagnostic = self.lastScriptError.map { "脚本异常: \($0)" }
+                    ?? (plats.isEmpty ? "脚本未上报任何可用平台（缺少 send(inited)）"
+                                      : "已加载，平台: \(plats.joined(separator: ","))")
                 cont.resume()
             }
         }
@@ -326,7 +336,11 @@ final class LXSourceEngine {
                             finish(LXResolvedURL(url: url, sourceName: platform))
                         }
                     }
-                    let onRejected: @convention(block) (JSValue?) -> Void = { _ in finish(nil) }
+                    let onRejected: @convention(block) (JSValue?) -> Void = { [weak self] value in
+                        let msg = value?.toString() ?? "未知错误"
+                        self?.queue.async { self?.lastDiagnostic = "[\(platform)] \(msg)" }
+                        finish(nil)
+                    }
                     promise.invokeMethod("then", withArguments: [
                         JSValue(object: onFulfilled, in: ctx)!,
                         JSValue(object: onRejected, in: ctx)!,
@@ -346,6 +360,10 @@ final class LXSourceEngine {
 
     func availableSources() -> [String] {
         queue.sync { Array(capabilities.keys).sorted() }
+    }
+
+    func diagnostic() -> String {
+        queue.sync { lastDiagnostic }
     }
 }
 

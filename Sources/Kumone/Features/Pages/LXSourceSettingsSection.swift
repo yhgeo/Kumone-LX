@@ -3,7 +3,7 @@ import SwiftUI
 // MARK: - LX 自定义音源设置区
 //
 // 导入 pdone/lx-music-source 等仓库的音源脚本（latest.js 原文或在线 URL），
-// 启用后当官方/内置解锁源拿不到播放地址时用这些脚本解析。
+// 启用后当官方接口拿不到播放地址时用它解析。可对每个音源做可用性实测。
 
 struct LXSourceSettingsSection: View {
     @StateObject private var manager = LXSourceManager.shared
@@ -11,6 +11,10 @@ struct LXSourceSettingsSection: View {
     @State private var importText = ""
     @State private var importURL = ""
     @State private var importing = false
+    @State private var testingKey: String?
+    @State private var testResults: [LXSourceManager.TestResult] = []
+    @State private var showTestResult = false
+    @State private var isTestingAll = false
 
     var body: some View {
         Section {
@@ -30,6 +34,18 @@ struct LXSourceSettingsSection: View {
                             }
                         }
                     }
+                    Button {
+                        Task { await test(source.key) }
+                    } label: {
+                        if testingKey == source.key {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Image(systemName: "waveform.path.ecg")
+                                .foregroundStyle(Theme.accent)
+                        }
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(testingKey != nil)
                 }
                 .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                     Button(role: .destructive) {
@@ -38,6 +54,19 @@ struct LXSourceSettingsSection: View {
                         Label("删除", systemImage: "trash")
                     }
                 }
+            }
+
+            if !manager.sources.isEmpty {
+                Button {
+                    Task { await testAll() }
+                } label: {
+                    if isTestingAll {
+                        ProgressView("测试中…")
+                    } else {
+                        Label("测试全部音源", systemImage: "checkmark.circle")
+                    }
+                }
+                .disabled(isTestingAll || testingKey != nil)
             }
 
             Button {
@@ -50,20 +79,80 @@ struct LXSourceSettingsSection: View {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
 
-            Text("导入 LX Music 音源脚本（latest.js）。启用后用于解析灰色/无版权歌曲播放地址。来源：pdone/lx-music-source。")
+            Text("用《晴天》实测每个音源能否解析播放地址。绿色✓可用，红色✗不可用。仅导入可信来源。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {
             Text("LX 自定义音源")
         } footer: {
-            Text("脚本在本机运行，请只导入可信来源。")
+            Text("脚本在本机运行，请只导入可信来源。来源：pdone/lx-music-source。")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .sheet(isPresented: $showImport) {
             importSheet
         }
+        .sheet(isPresented: $showTestResult) {
+            testResultSheet
+        }
     }
+
+    // MARK: - 测试结果弹窗
+
+    private var testResultSheet: some View {
+        NavigationStack {
+            List {
+                ForEach(testResults) { r in
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: r.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                            .foregroundStyle(r.ok ? .green : .red)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(r.name).font(.system(size: 14, weight: .medium))
+                            Text("\(r.ok ? "可用" : "不可用") · 耗时 \(String(format: "%.1f", r.elapsed))s"
+                                 + (r.platform.map { " · 平台 \($0)" } ?? ""))
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text(r.message)
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+            .navigationTitle("音源测试结果")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { showTestResult = false }
+                }
+            }
+        }
+    }
+
+    private func test(_ key: String) async {
+        await MainActor.run { testingKey = key }
+        let result = await manager.testSource(key)
+        await MainActor.run {
+            testingKey = nil
+            testResults = [result]
+            showTestResult = true
+        }
+    }
+
+    private func testAll() async {
+        await MainActor.run { isTestingAll = true }
+        var results: [LXSourceManager.TestResult] = []
+        for source in manager.sources {
+            results.append(await manager.testSource(source.key))
+        }
+        await MainActor.run {
+            isTestingAll = false
+            testResults = results
+            showTestResult = true
+        }
+    }
+
+    // MARK: - 导入
 
     private var importSheet: some View {
         NavigationStack {

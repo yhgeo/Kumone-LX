@@ -21,11 +21,18 @@ enum ReleaseChecker {
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/yhgeo/Kumone-LX/releases/latest")!)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
         request.timeoutInterval = 15
-        let (data, _) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await URLSession.shared.data(for: request)
+        // 仓库还没有任何 Release 时 GitHub 返回 404：视为"已是最新"，
+        // 不要弹"数据加载失败"。返回 releasesPage 作为兜底，ipaURL 为空。
+        if let http = response as? HTTPURLResponse, http.statusCode == 404 {
+            return Release(version: currentVersion, url: Self.releasesPage, ipaURL: nil)
+        }
         guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               let tag = obj["tag_name"] as? String,
               let html = obj["html_url"] as? String, let url = URL(string: html)
-        else { throw MusicAPIError.decoding("release") }
+        else {
+            return Release(version: currentVersion, url: Self.releasesPage, ipaURL: nil)
+        }
         let assets = obj["assets"] as? [[String: Any]] ?? []
         let ipa = assets.first { ($0["name"] as? String)?.lowercased().hasSuffix(".ipa") == true }
         let ipaURL = (ipa?["browser_download_url"] as? String).flatMap(URL.init)

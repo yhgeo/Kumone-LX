@@ -13,18 +13,8 @@ struct DailySnapshot: Codable, Hashable, Identifiable {
     var id: String { dateKey }
     let dateKey: String          // yyyy-MM-dd
     let savedAt: Date
-    let tracks: [ArchivedTrack]
-}
-
-struct ArchivedTrack: Codable, Hashable, Identifiable {
-    var id: Int { songID }
-    let songID: Int
-    let name: String
-    let artists: String
-    let album: String
-    let picURL: String?
-    let reason: String?
-    let durationMS: Int
+    /// 存完整 Track，历史页可直接重建播放上下文。
+    let tracks: [Track]
 }
 
 enum DailyRecommendArchiveError: LocalizedError {
@@ -82,21 +72,10 @@ final class DailyRecommendArchive {
         if fm.fileExists(atPath: fileURL(for: key).path) {
             return try? load(dateKey: key)
         }
-        let archived = tracks.map { t in
-            ArchivedTrack(
-                songID: t.id,
-                name: t.name,
-                artists: t.artists.map(\.name).joined(separator: "/"),
-                album: t.album.name,
-                picURL: t.album.picUrl,
-                reason: t.subtitle?.nilIfEmpty,
-                durationMS: t.durationMS
-            )
-        }
-        let snapshot = DailySnapshot(dateKey: key, savedAt: Date(), tracks: archived)
+        let snapshot = DailySnapshot(dateKey: key, savedAt: Date(), tracks: tracks)
         let data = try encoder.encode(snapshot)
         try data.write(to: fileURL(for: key), options: .atomic)
-        log.info("saved daily archive \(key, privacy: .public) count=\(archived.count)")
+        log.info("saved daily archive \(key, privacy: .public) count=\(tracks.count)")
         return snapshot
     }
 
@@ -125,8 +104,4 @@ final class DailyRecommendArchive {
             remove(dateKey: key)
         }
     }
-}
-
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

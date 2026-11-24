@@ -5,8 +5,6 @@ import SwiftUI
 
 struct DailyArchiveView: View {
     @State private var dates: [String] = []
-    @State private var selected: DailySnapshot?
-    @State private var loadError: String?
 
     private var store: DailyRecommendArchive { .shared }
 
@@ -73,23 +71,40 @@ private struct ArchiveDayView: View {
                         Text("存档于 \(snapshot.savedAt.formatted(.dateTime.year().month().day().hour().minute()))")
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text("共 \(snapshot.tracks.count) 首")
+                        Text("共 \(snapshot.tracks.count) 首 · 点击歌曲播放")
                             .font(.caption)
                             .foregroundStyle(.secondary)
+                        Button {
+                            player.play(tracks: snapshot.tracks, source: .daily, context: .daily)
+                        } label: {
+                            Label("播放全部", systemImage: "play.fill")
+                                .font(.system(size: 14, weight: .semibold))
+                        }
+                        .disabled(snapshot.tracks.isEmpty)
                     }
                     Section("歌曲") {
                         ForEach(snapshot.tracks) { t in
-                            HStack(spacing: 10) {
-                                if let pic = t.picURL, let url = pic.resizedImageURL(120) {
-                                    CachedAsyncImage(url: url)
-                                        .frame(width: 48, height: 48)
-                                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                                }
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(t.name).font(.system(size: 14, weight: .medium))
-                                    Text(t.artists).font(.caption).foregroundStyle(.secondary)
+                            Button {
+                                player.play(tracks: snapshot.tracks, source: .daily,
+                                            startAt: t, context: .daily)
+                            } label: {
+                                HStack(spacing: 10) {
+                                    if let pic = t.album.picUrl, let url = pic.resizedImageURL(120) {
+                                        CachedAsyncImage(url: url)
+                                            .frame(width: 48, height: 48)
+                                            .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    }
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(t.name)
+                                            .font(.system(size: 14, weight: .medium))
+                                            .foregroundStyle(.primary)
+                                        Text(t.artistNames)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                    }
                                 }
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                 }

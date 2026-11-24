@@ -117,6 +117,53 @@ final class LXSourceManager: ObservableObject {
         return nil
     }
 
+    /// 音源可用性测试结果。
+    struct TestResult: Identifiable {
+        let id = UUID()
+        let key: String
+        let name: String
+        let ok: Bool
+        let elapsed: TimeInterval
+        let platform: String?
+        let message: String
+    }
+
+    /// 对单个音源做实测：加载脚本 -> 用样例歌解析 -> 记录平台/耗时/结果。
+    func testSource(_ key: String) async -> TestResult {
+        guard let meta = sources.first(where: { $0.key == key }) else {
+            return TestResult(key: key, name: key, ok: false, elapsed: 0,
+                              platform: nil, message: "未找到音源")
+        }
+        // 用一首大众歌曲做探针，各音源靠歌名/歌手匹配
+        let sample: [String: Any] = [
+            "id": "1295216600", "songId": "1295216600", "songid": "1295216600",
+            "name": "晴天", "songname": "晴天",
+            "singer": "周杰伦", "artist": "周杰伦",
+            "duration": 269000,
+        ]
+        let start = Date()
+        await engine.loadScript(meta.rawScript, key: key)
+        let loadOK = engine.availableSources()
+        var ok = false
+        var platform: String?
+        var message = engine.diagnostic()
+        if !loadOK.isEmpty {
+            if let result = try? await engine.resolve(musicInfo: sample, quality: "320k") {
+                ok = true
+                platform = result.sourceName
+                message = "解析成功：\(result.url.host() ?? result.url.absoluteString)"
+            } else {
+                message = engine.diagnostic().isEmpty ? "解析失败（音源未返回有效地址）" : engine.diagnostic()
+            }
+        }
+        return TestResult(key: key,
+                          name: meta.name.isEmpty ? key : meta.name,
+                          ok: ok,
+                          elapsed: Date().timeIntervalSince(start),
+                          platform: platform,
+                          message: message)
+    }
+
     ///  dlopen 后各音源 support 的 quality 名称可能不同，这里统一映射 kumone 音质到 LX 音质。
     static func lxQuality(for audioQuality: String) -> String {
         switch audioQuality.lowercased() {
