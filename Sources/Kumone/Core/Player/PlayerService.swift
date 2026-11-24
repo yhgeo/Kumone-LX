@@ -476,6 +476,7 @@ final class PlayerService: ObservableObject {
     ///   playing an ad-hoc selection (search results, a single track) omit it.
     func play(tracks: [Track], source: PlaySource, startAt track: Track? = nil,
               context: PlayContext? = nil) {
+        PlaybackDiagnostics.shared.log("播放", "play(tracks) 收到 \(tracks.count) 首 source=\(source)")
         guard !tracks.isEmpty else { return }
         if let context { recordRecent(context) }
         isFMMode = false
@@ -519,6 +520,7 @@ final class PlayerService: ObservableObject {
 
     func togglePlayPause() {
         guard let track = currentTrack else { return }
+        PlaybackDiagnostics.shared.log("播放", "togglePlayPause《\(track.name)》当前\(isPlaying ? "播放中" : "暂停") deckLoaded=\(deckLoaded)")
         if isPlaying {
             pause()
             return
@@ -978,6 +980,8 @@ final class PlayerService: ObservableObject {
 
     private func startPlaying(_ track: Track,
                               localLease: OfflinePlaybackLease? = nil, resumeAt: TimeInterval = 0) {
+        // 顶层必经入口：任何切歌/播放都记录，避免只埋在 resolveAndLoad 时漏记。
+        PlaybackDiagnostics.shared.log("播放", "startPlaying《\(track.name)》id=\(track.id)")
         offlineScan?.cancel()
         offlineScan = nil
         offlineScanID = UUID()
