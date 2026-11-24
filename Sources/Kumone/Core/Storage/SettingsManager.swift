@@ -133,6 +133,7 @@ final class SettingsManager: ObservableObject {
         static let unblockSources = "settings.enabledUnblockSources"
         static let autoCheckUpdates = "settings.autoCheckUpdates"
         static let desktopLyrics = "settings.showDesktopLyrics"
+        static let hiddenTabs = "settings.hiddenTabs"
         #if os(macOS)
         static let menuBarPlayer = "settings.showMenuBarPlayer"
         static let automix = "settings.automixEnabled"
@@ -157,6 +158,11 @@ final class SettingsManager: ObservableObject {
 
     @Published var audioQuality: AudioQuality {
         didSet { UserDefaults.standard.set(audioQuality.rawValue, forKey: Keys.quality) }
+    }
+
+    /// 用户隐藏的底部 tab（存 IOSTab 的稳定字符串名）。
+    @Published var hiddenTabs: [String] {
+        didSet { UserDefaults.standard.set(hiddenTabs, forKey: Keys.hiddenTabs) }
     }
 
     static let audioCacheSizeRangeMB = 100...10_000
@@ -436,6 +442,7 @@ final class SettingsManager: ObservableObject {
     private init() {
         let defaults = UserDefaults.standard
         audioQuality = defaults.string(forKey: Keys.quality).flatMap(AudioQuality.init) ?? .exhigh
+        hiddenTabs = defaults.stringArray(forKey: Keys.hiddenTabs) ?? []
         enableAudioCache = defaults.object(forKey: Keys.enableAudioCache) as? Bool ?? true
         // A size somebody chose stays chosen; the untouched default becomes automatic.
         audioCacheAutomatic = defaults.object(forKey: Keys.audioCacheAutomatic) as? Bool

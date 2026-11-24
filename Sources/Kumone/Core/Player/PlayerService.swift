@@ -336,6 +336,8 @@ final class PlayerService: ObservableObject {
     private var currentWasAdvanced = false
 
     private init() {
+        // 触发诊断日志系统初始化（启动时写一条就绪记录）。
+        _ = PlaybackDiagnostics.shared
         sleepTimer.onDeadlineReached = { [weak self] in
             self?.pause()
         }
@@ -1165,8 +1167,10 @@ final class PlayerService: ObservableObject {
 
     private func resolveAndLoad(_ track: Track, generation: Int,
                                 localLease: OfflinePlaybackLease? = nil, resumeAt: TimeInterval = 0) async {
+        PlaybackDiagnostics.shared.log("播放", "准备播放《\(track.name)》id=\(track.id)")
         // A downloaded copy beats the network, and is all there is without one.
         if let lease = await acquireOfflineLease(for: track, generation: generation, reusing: localLease) {
+            PlaybackDiagnostics.shared.log("播放", "《\(track.name)》命中离线下载，本地播放")
             playLocalFile(lease.url, lease: lease, for: track, generation: generation, from: resumeAt)
             return
         }
@@ -1174,6 +1178,7 @@ final class PlayerService: ObservableObject {
         if usesOfflineQueue {
             // Without a network, the cache is the last place to look.
             if let cached = await EngineAudioCache.shared.cachedFileURL(trackID: track.id) {
+                PlaybackDiagnostics.shared.log("播放", "《\(track.name)》命中音频缓存，本地播放")
                 guard !Task.isCancelled, generation == resolveGeneration else { return }
                 playLocalFile(cached, lease: nil, for: track, generation: generation, from: resumeAt)
                 return

@@ -122,13 +122,20 @@ final class DailyRecommendArchive {
         return key(for: effective)
     }
 
-    /// 当天首次拉取成功时调用；同一归档日不覆盖。
+    /// 拉取成功后归档。规则：
+    ///  - 归档日按 6:00 分界（6 点前算昨天）。
+    ///  - 同一归档日首次写入后不覆盖；但若旧存档是 6 点前写的（凌晨拉到的
+    ///    昨日内容），6 点后的新数据会覆盖它——因为日推 6:00 才更新。
     @discardableResult
     func saveToday(_ tracks: [Track]) async throws -> DailySnapshot? {
         guard !tracks.isEmpty else { return nil }
         let key = Self.archiveDateKey()
-        if fm.fileExists(atPath: fileURL(for: key).path) {
-            return try? load(dateKey: key)
+        if fm.fileExists(atPath: fileURL(for: key).path),
+           let existing = try? load(dateKey: key) {
+            let savedHour = Calendar.current.component(.hour, from: existing.savedAt)
+            let nowHour = Calendar.current.component(.hour, from: Date())
+            let isStalePre6 = savedHour < 6 && nowHour >= 6
+            if !isStalePre6 { return existing }
         }
         let snapshot = DailySnapshot(dateKey: key, savedAt: Date(), tracks: tracks)
         let data = try encoder.encode(snapshot)

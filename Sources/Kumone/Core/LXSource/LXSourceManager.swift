@@ -277,9 +277,12 @@ final class LXSourceManager: ObservableObject {
             "duration": 269000,
         ]
         let start = Date()
+        let diag = PlaybackDiagnostics.shared
+        diag.log("测试", "开始测试音源 \(meta.name) key=\(key)")
         await engine.loadScript(meta.rawScript, key: key)
         try? await Task.sleep(for: .milliseconds(300))
         let platformCount = engine.availableSources().count
+        diag.log("测试", "\(meta.name) 上报平台 \(platformCount) 个")
 
         var qualityResults: [QualityResult] = []
         var firstOK: LXResolvedURL?
@@ -287,12 +290,14 @@ final class LXSourceManager: ObservableObject {
         for q in Self.testQualities {
             let qStart = Date()
             if let result = try? await engine.resolve(musicInfo: sample, quality: q, timeout: 3) {
-                qualityResults.append(QualityResult(quality: q, ok: true,
-                                                     elapsed: Date().timeIntervalSince(qStart)))
+                let e = Date().timeIntervalSince(qStart)
+                qualityResults.append(QualityResult(quality: q, ok: true, elapsed: e))
+                diag.log("测试", "\(meta.name) \(q) ✓ \(String(format:"%.1f",e))s platform=\(result.sourceName)")
                 if firstOK == nil { firstOK = result }
             } else {
-                qualityResults.append(QualityResult(quality: q, ok: false,
-                                                     elapsed: Date().timeIntervalSince(qStart)))
+                let e = Date().timeIntervalSince(qStart)
+                qualityResults.append(QualityResult(quality: q, ok: false, elapsed: e))
+                diag.log("测试", "\(meta.name) \(q) ✗ \(String(format:"%.1f",e))s 诊断=\(engine.diagnostic())")
             }
         }
 

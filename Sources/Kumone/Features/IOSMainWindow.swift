@@ -40,6 +40,15 @@ public struct IOSMainWindow: View {
         UpstreamGate { gatedBody }
             .tint(Theme.accent)
             .preferredColorScheme(settings.appearance.colorScheme)
+            #if os(macOS)
+            .onChange(of: settings.hiddenTabs) { _, hidden in
+                if hidden.contains(selectedTab.stableKey), selectedTab != .home { selectedTab = .home }
+            }
+            #else
+            .onChange(of: settings.hiddenTabs) { hidden in
+                if hidden.contains(selectedTab.stableKey), selectedTab != .home { selectedTab = .home }
+            }
+            #endif
     }
 
     private var gatedBody: some View {
@@ -255,26 +264,32 @@ public struct IOSMainWindow: View {
     @available(iOS 26.0, *)
     private var iOS26TabView: some View {
         TabView(selection: $selectedTab) {
-            Tab("推荐", systemImage: "house", value: .home) {
-                tabStack(.home) { HomeView() }
+            if !settings.hiddenTabs.contains(IOSTab.home.stableKey) {
+                Tab("推荐", systemImage: "house", value: .home) {
+                    tabStack(.home) { HomeView() }
+                }
             }
-
-            Tab("精选", systemImage: "square.grid.2x2", value: .explore) {
-                tabStack(.explore) { ExploreView() }
+            if !settings.hiddenTabs.contains(IOSTab.explore.stableKey) {
+                Tab("精选", systemImage: "square.grid.2x2", value: .explore) {
+                    tabStack(.explore) { ExploreView() }
+                }
             }
-
-            Tab("漫游", systemImage: "wave.3.right.circle", value: .fm) {
-                tabStack(.fm) { FMView() }
+            if !settings.hiddenTabs.contains(IOSTab.fm.stableKey) {
+                Tab("漫游", systemImage: "wave.3.right.circle", value: .fm) {
+                    tabStack(.fm) { FMView() }
+                }
             }
-
-            Tab("我的", systemImage: "person.crop.circle", value: .library) {
-                tabStack(.library) { IOSLibraryView(showLogin: $showLogin) }
+            if !settings.hiddenTabs.contains(IOSTab.library.stableKey) {
+                Tab("我的", systemImage: "person.crop.circle", value: .library) {
+                    tabStack(.library) { IOSLibraryView(showLogin: $showLogin) }
+                }
             }
-
-            Tab(value: .search, role: .search) {
-                tabStack(.search) { SearchView(query: "") }
-            } label: {
-                Label("搜索", systemImage: "magnifyingglass")
+            if !settings.hiddenTabs.contains(IOSTab.search.stableKey) {
+                Tab(value: .search, role: .search) {
+                    tabStack(.search) { SearchView(query: "") }
+                } label: {
+                    Label("搜索", systemImage: "magnifyingglass")
+                }
             }
         }
     }
@@ -297,7 +312,7 @@ public struct IOSMainWindow: View {
                         .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
 
-                GlassTabBar(items: Self.tabItems, selection: $selectedTab) { tab in
+                GlassTabBar(items: visibleTabs, selection: $selectedTab) { tab in
                     popToRoot(tab)
                 }
             }
@@ -362,18 +377,56 @@ public struct IOSMainWindow: View {
     }
 }
 
-enum IOSTab: Hashable {
+enum IOSTab: Hashable, CaseIterable {
     case home, explore, fm, search, library
+
+    /// 稳定字符串标识，用于设置里持久化隐藏状态。
+    var stableKey: String {
+        switch self {
+        case .home: return "home"
+        case .explore: return "explore"
+        case .fm: return "fm"
+        case .search: return "search"
+        case .library: return "library"
+        }
+    }
+
+    init?(stableKey: String) {
+        switch stableKey {
+        case "home": self = .home
+        case "explore": self = .explore
+        case "fm": self = .fm
+        case "search": self = .search
+        case "library": self = .library
+        default: return nil
+        }
+    }
+
+    var title: String {
+        switch self {
+        case .home: return String(localized: "推荐")
+        case .explore: return String(localized: "精选")
+        case .fm: return String(localized: "漫游")
+        case .search: return String(localized: "搜索")
+        case .library: return String(localized: "我的")
+        }
+    }
 }
 
 extension IOSMainWindow {
-    static let tabItems: [GlassTabBar.Item] = [
+    static let allTabItems: [GlassTabBar.Item] = [
         .init(tab: .home, title: "推荐", icon: "house"),
         .init(tab: .explore, title: "精选", icon: "square.grid.2x2"),
         .init(tab: .fm, title: "漫游", icon: "dot.radiowaves.left.and.right"),
         .init(tab: .search, title: "搜索", icon: "magnifyingglass"),
         .init(tab: .library, title: "我的", icon: "person.crop.circle"),
     ]
+
+    /// 过滤掉用户隐藏的 tab；至少保留"推荐"，避免全部隐藏导致空白界面。
+    var visibleTabs: [GlassTabBar.Item] {
+        let items = Self.allTabItems.filter { !settings.hiddenTabs.contains($0.tab.stableKey) }
+        return items.isEmpty ? Array(Self.allTabItems.prefix(1)) : items
+    }
 }
 
 private enum NowPlayingTransitionID {

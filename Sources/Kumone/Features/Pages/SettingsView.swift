@@ -63,6 +63,15 @@ struct SettingsView: View {
         #endif
     }
 
+    /// 设置页分类，避免一屏塞太多选项。
+    private enum Category: String, CaseIterable, Identifiable {
+        case playback = "播放"
+        case appearance = "界面"
+        case system = "系统"
+        var id: String { rawValue }
+    }
+    @State private var category: Category = .playback
+
     var body: some View {
         #if os(macOS)
         NavigationStack(path: $navigationPath) { settingsForm }
@@ -89,6 +98,13 @@ struct SettingsView: View {
 
     private var settingsForm: some View {
         Form {
+            Picker("分类", selection: $category) {
+                ForEach(Category.allCases) { c in Text(c.rawValue).tag(c) }
+            }
+            .pickerStyle(.segmented)
+            .padding(.vertical, 4)
+
+            if category == .playback {
             Section("播放") {
                 Picker("音质", selection: $settings.audioQuality) {
                     ForEach(AudioQuality.allCases) { quality in
@@ -141,6 +157,30 @@ struct SettingsView: View {
 
             LXSourceSettingsSection()
             DiagnosticsSettingsSection()
+            } // end playback
+
+            if category == .appearance {
+            // 隐藏底部 tab（仅 iOS）
+            #if os(iOS)
+            Section {
+                ForEach(IOSTab.allCases) { tab in
+                    Toggle(tab.title, isOn: Binding(
+                        get: { !settings.hiddenTabs.contains(tab.stableKey) },
+                        set: { visible in
+                            if visible {
+                                settings.hiddenTabs.removeAll { $0 == tab.stableKey }
+                            } else if tab != .home {
+                                settings.hiddenTabs.append(tab.stableKey)
+                            }
+                        }
+                    ))
+                }
+                Text("隐藏后底部不再显示该入口；「推荐」不可隐藏。隐藏页面里的功能（如搜索）仍可通过其它入口进入。")
+                    .font(.caption).foregroundStyle(.secondary)
+            } header: {
+                Text("底部标签")
+            }
+            #endif
 
             Section("外观") {
                 Picker("主题", selection: $settings.appearance) {
@@ -227,6 +267,9 @@ struct SettingsView: View {
                 #endif
             }
 
+            } // end appearance
+
+            if category == .system {
             Section("存储") {
                 NavigationLink(value: SettingsPage.storage) {
                     Label("存储空间", systemImage: "internaldrive")
@@ -298,6 +341,7 @@ struct SettingsView: View {
                 .listRowBackground(Color.clear)
                 .listRowSeparator(.hidden)
             }
+            } // end system
         }
         .formStyle(.grouped)
         #if os(macOS)

@@ -30,6 +30,13 @@ final class PlaybackDiagnostics {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
         logFile = docs.appendingPathComponent("playback-diagnostics.json")
         load()
+        // 每次启动写一条，便于确认日志系统本身正常工作。
+        let entry = DiagnosticEntry(time: dateFormatter.string(from: Date()),
+                                    category: "系统",
+                                    message: "App 启动 / 日志系统就绪 v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?")")
+        entries.append(entry)
+        if entries.count > maxEntries { entries.removeFirst(entries.count - maxEntries) }
+        persist()
     }
 
     private func load() {
