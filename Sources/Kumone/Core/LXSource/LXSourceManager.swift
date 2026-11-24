@@ -233,10 +233,11 @@ final class LXSourceManager: ObservableObject {
         return nil
     }
 
-    /// 单个音质的测试结果。
+    /// 单个音质的测试结果（quality 为官方档位 key，显示用 displayName）。
     struct QualityResult: Identifiable {
         let id = UUID()
         let quality: String
+        var displayName: String { AudioQuality(rawValue: quality)?.displayName ?? quality }
         let ok: Bool
         let elapsed: TimeInterval
     }
@@ -253,8 +254,8 @@ final class LXSourceManager: ObservableObject {
         var qualityResults: [QualityResult] = []
     }
 
-    /// 测试用的音质列表（与 Common 设置对齐）。
-    static let testQualities = ["320k", "128k", "flac", "flac24bit"]
+    /// 音源测试档位与官方音质设置完全一致（标准/较高/极高/无损/Hi-Res）。
+    static let testQualities = AudioQuality.allCases.map(\.rawValue)
 
     /// 测试完成后应用结果：按"成功优先、延迟从低到高"重排启用顺序；
     /// 完全不通的音源自动取消启用。返回被禁用的音源名列表。
@@ -323,22 +324,23 @@ final class LXSourceManager: ObservableObject {
 
         var qualityResults: [QualityResult] = []
         var firstOK: LXResolvedURL?
-        // 优化：先测 320k、128k 两档；都失败则判定不可用，跳过 flac/flac24bit
-        // （不可能一个音源既不支持有损又支持无损）。每档最多 2 秒。
+        // 用官方五档逐档测；每档映射成 lx 音质值传给音源，显示用官方中文名。
+        // 先测有损三档（标准/较高/极高），全失败则跳过无损两档。每档最多 2 秒。
         for (idx, q) in Self.testQualities.enumerated() {
-            if idx >= 2, firstOK == nil { break }
+            if idx >= 3, firstOK == nil { break }
             let qStart = Date()
-            if let result = try? await engine.resolve(musicInfo: sample, quality: q, timeout: 2),
+            let lxQ = Self.lxQuality(for: q)
+            if let result = try? await engine.resolve(musicInfo: sample, quality: lxQ, timeout: 2),
                await verifyAudioURL(result.url) {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: true, elapsed: e))
-                diag.log("测试", "\(meta.name) \(q) ✓ \(String(format:"%.1f",e))s platform=\(result.sourceName)")
+                diag.log("测试", "\(meta.name) \(q)(\(lxQ)) ✓ \(String(format:"%.1f",e))s platform=\(result.sourceName)")
                 if firstOK == nil { firstOK = result }
             } else {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: false, elapsed: e))
                 let d = engine.diagnostic()
-                diag.log("测试", "\(meta.name) \(q) ✗ \(String(format:"%.1f",e))s 验证失败/未返回 诊断=\(d)")
+                diag.log("测试", "\(meta.name) \(q)(\(lxQ)) ✗ \(String(format:"%.1f",e))s 验证失败/未返回 诊断=\(d)")
             }
         }
 
@@ -369,11 +371,12 @@ final class LXSourceManager: ObservableObject {
     ///  dlopen 后各音源 support 的 quality 名称可能不同，这里统一映射 kumone 音质到 LX 音质。
     static func lxQuality(for audioQuality: String) -> String {
         switch audioQuality.lowercased() {
-        case "hires", "hr": return "flac24bit"
-        case "lossless", "sq": return "flac"
-        // 标准/较高/极高 一律用 320k：绝大多数 lx 音源只配了 320k/128k，
-        // 128k 在不少音源上不支持，导致"测试可用但播放跳过"。
-        case "standard", "higher", "high", "exhigh", "h", "128k": return "320k"
+        case "hires", "hr", "flac24bit": return "flac24bit"
+        case "lossless", "sq", "flac": return "flac"
+        // 官方五档与 lx 音质对齐：标准→128k，较高/极高→320k。
+        // 极高与较高同为 320k（多数音源最高就 320k），无损/Hi-Res 用 flac。
+        case "standard", "128k": return "128k"
+        case "higher", "high", "exhigh", "h", "320k": return "320k"
         default: return "320k"
         }
     }

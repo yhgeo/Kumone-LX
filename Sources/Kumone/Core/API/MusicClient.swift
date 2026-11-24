@@ -39,11 +39,16 @@ final class MusicClient: @unchecked Sendable {
     private static let webUserAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15"
 
-    // The desktop client the eapi requests speak as.
-    private static let eapiUserAgent = "\(Upstream.clientName) 9.0.90/5038 (iPhone; iOS 16.2; zh_CN)"
-    private static let eapiAppVersion = "3.1.17.204416"
-    private static let eapiOSVersion = "Microsoft-Windows-10-Professional-build-19045-64bit"
+    // eapi 客户端身份：统一为 iOS 移动端，避免 UA(iPhone) 与 osver(Windows)/os(pc)
+    // 自相矛盾被风控判定为伪造客户端（"检测到您的网络环境存在风险"）。
+    private static let eapiUserAgent = "\(Upstream.clientName)/9.1.90 (iOS 16.6.1; iPhone; zh_CN)"
+    private static let eapiAppVersion = "9.1.90"
+    private static let eapiOSVersion = "16.6.1"
     private static let eapiChannel = Upstream.tag
+    /// eapi 平台标识：ios / pc。默认 ios，与 UA 一致；可用 UserDefaults 覆盖。
+    private static var eapiOS: String {
+        UserDefaults.standard.string(forKey: "settings.eapiOS") ?? "ios"
+    }
 
     /// The device ID the eapi header carries, made once and kept beside the
     /// cookies: the service trusts a device it has seen before, and a constant
@@ -267,15 +272,16 @@ final class MusicClient: @unchecked Sendable {
         let apiPath = "/api" + path
         var body = payload
         let now = Date().timeIntervalSince1970
+        let isIOS = Self.eapiOS == "ios"
         var header: [String: String] = [
             "osver": Self.eapiOSVersion,
             "deviceId": Self.deviceID,
-            "os": "pc",
+            "os": Self.eapiOS,
             "appver": Self.eapiAppVersion,
-            "versioncode": "140",
-            "mobilename": "",
+            "versioncode": isIOS ? "1090" : "140",
+            "mobilename": isIOS ? "iPhone" : "",
             "buildver": String(Int(now)),
-            "resolution": "1920x1080",
+            "resolution": isIOS ? "1179x2556" : "1920x1080",
             "channel": Self.eapiChannel,
             "requestId": String(format: "%lld_%04d", Int64(now * 1000), Int(now * 1_000_000) % 1000),
             "__csrf": cookie(named: "__csrf") ?? "",

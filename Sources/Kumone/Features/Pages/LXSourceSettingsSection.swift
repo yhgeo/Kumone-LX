@@ -45,7 +45,7 @@ struct LXSourceSettingsSection: View {
                                         .font(.system(size: 10, design: .monospaced))
                                         .foregroundStyle(r.ok ? .green : .secondary)
                                     ForEach(r.qualityResults) { q in
-                                        Text("\(q.quality) \(q.ok ? "✓" : "✗")")
+                                        Text("\(q.displayName) \(q.ok ? "✓" : "✗")")
                                             .font(.system(size: 9))
                                             .foregroundStyle(q.ok ? .green : .secondary)
                                     }
@@ -109,7 +109,7 @@ struct LXSourceSettingsSection: View {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
 
-            Text("用《晴天》实测：先测 320k/128k，都失败即判不可用（跳过无损档），每档最多 2 秒。结果直接显示在列表；可用且快的排前面，不通的自动停用。")
+            Text("用《晴天》实测标准/较高/极高/无损/Hi-Res 五档（与官方音质一致），每档最多 2 秒。结果直接显示在列表；可用且快的排前面，不通的自动停用。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {
@@ -185,7 +185,7 @@ struct LXSourceSettingsSection: View {
                             // 各音质测试结果
                             HStack(spacing: 8) {
                                 ForEach(r.qualityResults) { q in
-                                    Text("\(q.quality) \(q.ok ? "✓" : "✗")")
+                                    Text("\(q.displayName) \(q.ok ? "✓" : "✗")")
                                         .font(.system(size: 10))
                                         .foregroundStyle(q.ok ? .green : .secondary)
                                 }

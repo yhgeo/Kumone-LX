@@ -71,6 +71,9 @@ struct SettingsView: View {
         var id: String { rawValue }
     }
     @State private var category: Category = .playback
+    #if os(iOS)
+    @AppStorage("settings.eapiOS") private var eapiOS = "ios"
+    #endif
 
     var body: some View {
         #if os(macOS)
@@ -286,6 +289,17 @@ struct SettingsView: View {
             #endif
 
             SyncSettingsSection()
+
+            #if os(iOS)
+            Section("接口") {
+                Picker("客户端标识", selection: $eapiOS) {
+                    Text("iOS（默认）").tag("ios")
+                    Text("电脑端").tag("pc")
+                }
+                Text("官方接口一直提示「网络环境存在风险」时，可切换此项后重试。iOS 与 UA 一致，通常风控更少；两种都试过仍风控，请依赖 LX 自定义音源。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            #endif
 
             Section("账号") {
                 if let profile = account.profile {
