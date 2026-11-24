@@ -18,7 +18,9 @@ let package = Package(
         .target(
             name: "KumoneIOSFeature",
             dependencies: [
-                .product(name: "KumoneCore", package: "kumone"),
+                // 本地 path 依赖的 identity 取目录名。本定制版目录为 Kumone-LX，
+                // 原项目为 kumone，故这里引用 "Kumone-LX"。
+                .product(name: "KumoneCore", package: "Kumone-LX"),
             ],
             path: "Sources/KumoneIOSFeature"
         ),
