@@ -47,3 +47,9 @@
 
 - VIP / 版权歌曲能否播放取决于官方接口与所导入音源的实际可用性。
 - JavaScriptCore 不支持 Node 的 `require`/`fs` 等能力；依赖 Node 原生模块的音源脚本不可用（绝大多数 lx 音源只依赖 `request`，可正常运行）。
+
+## 二次定制（2026-11-24）
+
+- **VIP 歌曲改走自定义音源**：`PlayerService.resolveSource` 先判断歌曲可播放性，VIP/付费/无版权/下架歌曲直接走 LX 自定义音源，不再请求网易云官方接口（规避"检测到您的网络环境存在风险"风控提示与自动跳过）。非 VIP 歌曲仍走官方资源，速度快。官方只给试听片段时也切自定义音源拿完整版。
+- **移除 iCloud 同步**：设置页的 iCloud 区、登录页/侧栏的同步登录按钮、播放接力横幅/列表全部置空，SyncService 不再启动。TrollStore 环境无 iCloud 权限，去掉更干净。
+- **修正更新地址**：`ReleaseChecker` 从 `missuo/kumone` 改为 `yhgeo/Kumone-LX`，设置页检查更新指向本定制版仓库。
