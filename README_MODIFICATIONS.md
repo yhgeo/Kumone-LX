@@ -61,3 +61,11 @@
 - **历史存档可播放**：DailySnapshot 改存完整 `Track`（Codable），历史某天页每行可点击播放（startAt 定位），并加"播放全部"。
 - **推荐历史入口**：移到「每日推荐」页 header，播放全部按钮下方，无需绕到首页卡片。
 - **检查更新**：`ReleaseChecker` 对无 Release 的 404 优雅降级为"已是最新版本"，不再报"数据加载失败"；并建立 `v0.1.0` Release 带 IPA，检查更新可正常工作。
+
+## 四次修复（2026-11-24 夜）
+
+- **音源测试解构失败**：野花等音源用 `let {...}=globalThis.lx` 解构，之前只注入了全局 request/on/send，缺 `lx` 对象。现在注入完整 `lx`（EVENT_NAMES/request/on/send/env/version/currentScriptInfo/utils 含 md5/aes/buffer）。测试改为等待异步 inited 完成后再 resolve。
+- **音源互相覆盖**：导入 key 之前一律用 URL 末段 "latest"，导致新音源覆盖旧的。改为按音源名生成唯一 key，重名自动加序号。
+- **一键导入**：设置页「一键导入全部音源」按钮，通过 GitHub API 拉取 pdone/lx-music-source 全部目录的 latest.js 批量导入，弹窗显示成功/失败数。
+- **历史页加载卡死**：旧版存档是精简结构，新版解码失败后无限转圈。现在兼容旧格式（重建为可播放 Track），失败时显示错误+重试按钮，不再死转。
+- **普通歌回归**：git diff 对比初版定位到 `freeTrialInfo==nil` 判断把带试听字段的普通歌误判跳过。恢复初版"有 URL 就用"逻辑；freeTrialInfo 只作试听标记，不影响有 URL 先播。
