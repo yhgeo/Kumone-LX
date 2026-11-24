@@ -6,17 +6,10 @@ name: Build cache
 # any of them builds a new entry; otherwise a run only restores the existing
 # one, which keeps GitHub from evicting it after seven idle days.
 
+# 定制版只需要 iOS TrollStore 构建（trollstore.yml）。
+# 原项目的 macOS 缓存预热依赖 Developer ID 签名与 MLX/Metal，TrollStore 场景用不到，
+# 改为仅手动触发，避免 push 时无谓失败。
 on:
-  push:
-    branches: [main]
-    paths:
-      - Package.swift
-      - Package.resolved
-      - Scripts/build-app.sh
-      - Scripts/fetch-mlx-metallib.sh
-      - .github/workflows/build-cache.yml
-  schedule:
-    - cron: "17 3 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -67,7 +60,7 @@ jobs:
         if: steps.restore.outputs.cache-hit != 'true'
         run: |
           ARCHES="arm64 x86_64" FETCH_MLX_METALLIB=1 \
-            Scripts/build-app.sh release
+            bash Scripts/build-app.sh release
 
       - name: Save build cache
         if: steps.restore.outputs.cache-hit != 'true'

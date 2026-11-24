@@ -108,10 +108,11 @@ final class LXSourceManager: ObservableObject {
     func resolve(track: Track, quality: String = "128k") async -> LXResolvedURL? {
         for key in enabledKeys.sorted() {
             guard let meta = sources.first(where: { $0.key == key }) else { continue }
-            // 懒加载脚本到引擎（每次解析前 ensure，避免脚本状态丢失）
+            // 懒加载脚本到引擎（每次解析前 reload，避免脚本状态污染）
             _ = try? await engine.loadScript(meta.rawScript, key: key)
-            if let result = try? await engine.resolve(source: key, musicInfo: track.lxMusicInfo, quality: quality) {
-                log.info("LX resolved \(track.id) via \(key, privacy: .public)")
+            // 引擎会遍历该脚本上报的所有平台（kw/kg/tx/wy/mg...）
+            if let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality) {
+                log.info("LX resolved \(track.id) via \(key, privacy: .public) platform=\(result.sourceName, privacy: .public)")
                 return result
             }
         }

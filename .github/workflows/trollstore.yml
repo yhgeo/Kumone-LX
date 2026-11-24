@@ -49,27 +49,28 @@ jobs:
           test -n "$APP" && test -d "$APP" || { echo "app not found"; exit 1; }
           echo "APP=$APP" >> "$GITHUB_ENV"
           echo "path=$APP"
+          echo "=== app 内容 ==="
+          ls -la "$APP" | head -30
 
       - name: Pseudo-sign with ldid (TrollStore CoreTrust)
         run: |
           # 用 entitlements 伪签名可执行文件，TrollStore 靠 CoreTrust bug 安装，无需开发者证书
           # 生成一份干净的 entitlements（ldid 对 XML 注释敏感，原文件含大量注释）
-          cat > "$RUNNER_TEMP/ent.plist" <<'PLIST'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-              <key>get-task-allow</key>
-              <true/>
-              <key>com.apple.security.application-groups</key>
-              <array>
-                  <string>group.sb.moe.kumone-ios</string>
-              </array>
-          </dict>
-          </plist>
-          PLIST
-          plutil -lint "$RUNNER_TEMP/ent.plist"
-          ldid -S"$RUNNER_TEMP/ent.plist" "$APP/KumoneIOS"
+          ENT="$GITHUB_WORKSPACE/ent-clean.plist"
+          printf '%s\n' \
+            '<?xml version="1.0" encoding="UTF-8"?>' \
+            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+            '<plist version="1.0">' \
+            '<dict>' \
+            '  <key>get-task-allow</key>' \
+            '  <true/>' \
+            '</dict>' \
+            '</plist>' > "$ENT"
+          plutil -lint "$ENT"
+          BIN="$APP/KumoneIOS"
+          ls -la "$BIN" "$ENT"
+          ldid -S"$ENT" "$BIN"
+          echo "ldid done"
           # 确保后台音频 + ATS 已写入（工程 Info.plist 已含，这里兜底校验）
           /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" || \
             /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$APP/Info.plist"

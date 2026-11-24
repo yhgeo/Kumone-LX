@@ -1,8 +1,9 @@
 name: Release
 
+# 定制版用 trollstore.yml 在 tag 时发布 iOS IPA。
+# 原 macOS Release 需 Developer ID + Sparkle 私钥，TrollStore 场景用不到，改为手动。
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write

@@ -315,17 +315,34 @@ final class LXSourceEngine {
         )
     }
 
-    /// 解析播放地址。musicInfo 至少包含 id / name；不同音源需要的字段不同，
-    /// 调用方应尽量把 Track 的完整字段塞进去（参见 Track.lxMusicInfo）。
-    func resolve(source: String, musicInfo: [String: Any], quality: String = "128k") async throws -> LXResolvedURL {
+    /// 解析播放地址。会遍历当前脚本上报的全部平台（kw/kg/tx/wy/mg...）逐一尝试，
+    /// 返回第一个可用的 https 地址。musicInfo 尽量塞全字段（参见 Track.lxMusicInfo）。
+    func resolve(musicInfo: [String: Any], quality: String = "128k") async throws -> LXResolvedURL {
+        let platforms = queue.sync { Array(capabilities.keys).sorted() }
+        let fallbackHandler = queue.sync { requestHandlers["__pending__"] }
+        guard !platforms.isEmpty || fallbackHandler != nil else {
+            throw LXSourceError.notInitialized
+        }
+        // 若脚本未 send inited（无平台信息），用占位 source 走唯一 handler。
+        let candidates = platforms.isEmpty ? ["kw"] : platforms
+        for platform in candidates {
+            if let result = try? await resolveOne(platform: platform, musicInfo: musicInfo, quality: quality) {
+                return result
+            }
+        }
+        throw LXSourceError.noURL
+    }
+
+    /// 单个平台的解析。失败返回 nil，由调用方决定继续尝试下一个平台。
+    private func resolveOne(platform: String, musicInfo: [String: Any], quality: String) async throws -> LXResolvedURL? {
         try await withCheckedThrowingContinuation { cont in
             queue.async {
-                guard let handler = self.requestHandlers[source] ?? self.requestHandlers["__pending__"] else {
-                    cont.resume(throwing: LXSourceError.notInitialized)
+                guard let handler = self.requestHandlers[platform] ?? self.requestHandlers["__pending__"] else {
+                    cont.resume(returning: nil)
                     return
                 }
                 let payload: [String: Any] = [
-                    "source": source,
+                    "source": platform,
                     "action": "musicUrl",
                     "info": [
                         "type": quality,
@@ -334,10 +351,15 @@ final class LXSourceEngine {
                 ]
                 let arg = JSValue(object: payload, in: self.context)!
                 guard let promise = handler.call(withArguments: [arg]) else {
-                    cont.resume(throwing: LXSourceError.scriptFailed("handler 未返回 Promise"))
+                    cont.resume(returning: nil)
                     return
                 }
-                // 兼容两种返回：Promise 或直接的 thenable
+                var finished = false
+                let finish: (LXResolvedURL?) -> Void = { result in
+                    guard !finished else { return }
+                    finished = true
+                    cont.resume(returning: result)
+                }
                 let then = promise.objectForKeyedSubscript("then")
                 if then?.isObject == true || then?.isCallable == true {
                     let onFulfilled: @convention(block) (JSValue?) -> Void = { [weak self] value in
@@ -345,27 +367,27 @@ final class LXSourceEngine {
                         let text = value?.toString() ?? ""
                         self.queue.async {
                             guard let url = URL(string: text), url.scheme?.hasPrefix("http") == true else {
-                                cont.resume(throwing: LXSourceError.invalidURL(text))
+                                finish(nil)
                                 return
                             }
-                            cont.resume(returning: LXResolvedURL(url: url, sourceName: source))
+                            finish(LXResolvedURL(url: url, sourceName: platform))
                         }
                     }
-                    let onRejected: @convention(block) (JSValue?) -> Void = { [weak self] value in
-                        guard let self else { return }
-                        let msg = value?.toString() ?? "unknown"
-                        self.queue.async { cont.resume(throwing: LXSourceError.scriptFailed(msg)) }
+                    let onRejected: @convention(block) (JSValue?) -> Void = { _ in
+                        finish(nil)
                     }
                     promise.invokeMethod("then", withArguments: [
                         JSValue(object: onFulfilled, in: self.context)!,
                         JSValue(object: onRejected, in: self.context)!,
                     ])
+                    // 兜底：脚本 Promise 永不 settle 时超时返回 nil
+                    self.queue.asyncAfter(deadline: .now() + 20) { finish(nil) }
                 } else {
                     let text = promise.toString() ?? ""
                     if let url = URL(string: text), url.scheme?.hasPrefix("http") == true {
-                        cont.resume(returning: LXResolvedURL(url: url, sourceName: source))
+                        finish(LXResolvedURL(url: url, sourceName: platform))
                     } else {
-                        cont.resume(throwing: LXSourceError.invalidURL(text))
+                        finish(nil)
                     }
                 }
             }
