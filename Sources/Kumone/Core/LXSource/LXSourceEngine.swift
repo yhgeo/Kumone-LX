@@ -12,16 +12,13 @@ import os.log
 //   - on('request', handler)           -> 保存 handler，Swift 侧解析歌曲时调用
 //   - send('inited', info)             -> 脚本初始化完成，记录支持的能力
 //   - EVENT_NAMES / setTimeout / clearTimeout / console / atob / btoa
-//   - md5 / aes / rsa（脚本可选使用）
 //
-// 解析流程：Swift 调用 `resolve(sourceID:musicInfo:quality:)`，引擎构造
-//   { source, action:'musicUrl', info:{ type, musicInfo } }
-// 交给脚本的 request handler，Promise resolve 出 https 播放地址。
+// 所有 JS 执行与状态读写都在同一串行队列上，保证线程安全。
 
 /// 一个已导入的音源脚本的元信息（来自文件头注释 @name/@version 等）。
 struct LXSourceMeta: Codable, Hashable, Identifiable {
     var id: String { key }
-    let key: String          // 文件名主干，如 "xinghai"
+    let key: String
     let name: String
     let author: String
     let version: String
@@ -53,28 +50,23 @@ enum LXSourceError: LocalizedError {
     }
 }
 
-/// 线程约束：JSContext 不是线程安全的，所有脚本执行与 request handler 调用
-/// 都串行跑到同一队列。解析接口用 async 桥接回调用方。
 final class LXSourceEngine {
 
     static let shared = LXSourceEngine()
 
     private let log = Logger(subsystem: "sb.moe.kumone", category: "lx-source")
     private let queue = DispatchQueue(label: "sb.moe.kumone.lxsource", qos: .userInitiated)
-    private let context = JSContext()
+    private var context: JSContext?
     private let session: URLSession
 
-    /// 已注册脚本的 request handler（key = source id）。
+    /// 当前脚本注册的唯一 request handler；key = 平台代号（kw/kg/tx/wy/mg），
+    /// ".__pending__" 是脚本未上报平台时的兜底。
     private var requestHandlers: [String: JSValue] = [:]
-    /// 脚本上报的能力：source -> [actions]。
+    /// 当前脚本上报的平台 -> actions。
     private var capabilities: [String: [String]] = [:]
     /// native setTimeout 计时器，防止被 GC。
     private var timers: [Int32: DispatchWorkItem] = [:]
     private var timerCounter: Int32 = 0
-    /// 等待 inited 的连续请求 id。
-    private var initWaiters: [Int: CheckedContinuation<Void, Never>] = [:]
-    private var initWaiterCounter = 0
-    private var didInit = false
 
     init() {
         let cfg = URLSessionConfiguration.ephemeral
@@ -84,43 +76,46 @@ final class LXSourceEngine {
             "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15"
         ]
         self.session = URLSession(configuration: cfg)
-        installShim()
     }
 
     // MARK: - 宿主 shim
 
+    /// 每次加载脚本都重建 JSContext：脚本顶层有 `const`，重复 evaluateScript
+    /// 会因为标识符重复声明而 SyntaxError。
     private func installShim() {
-        context?.exceptionHandler = { [weak self] ctx, value in
+        let ctx = JSContext()!
+        self.context = ctx
+        ctx.exceptionHandler = { [weak self] _, value in
             let msg = value?.toString() ?? "unknown JS exception"
             self?.log.error("JS exception: \(msg, privacy: .public)")
         }
 
-        // console
-        let console = JSValue(newObjectIn: context)!
-        for level in ["log", "warn", "error", "info"] {
-            console.setObject(JSValue(object: { (args: [Any]) in
-                let text = args.map { "\($0)" }.joined(separator: " ")
-                NSLog("[LX:\(level)] %@", text)
-            }, in: context)!, forKey: level)
+        // console：只取第一个参数转字符串，足够脚本调试用
+        let logFn: @convention(block) (String) -> Void = { msg in
+            NSLog("[LX] %@", msg)
         }
-        context?.setObject(console, forKeyedSubscript: "console" as NSCopying)
+        let console = JSValue(newObjectIn: ctx)!
+        for level in ["log", "warn", "error", "info"] {
+            console[level] = JSValue(object: logFn, in: ctx)
+        }
+        ctx["console"] = console
 
         // EVENT_NAMES
-        let events = JSValue(newObjectIn: context)!
-        events.setObject("request", forKeyedSubscript: "request" as NSCopying)
-        events.setObject("inited", forKeyedSubscript: "inited" as NSCopying)
-        events.setObject("updateAlert", forKeyedSubscript: "updateAlert" as NSCopying)
-        context?.setObject(events, forKeyedSubscript: "EVENT_NAMES" as NSCopying)
+        let events = JSValue(newObjectIn: ctx)!
+        events["request"] = "request"
+        events["inited"] = "inited"
+        events["updateAlert"] = "updateAlert"
+        ctx["EVENT_NAMES"] = events
 
         // request(url, options, callback) -> URLSession
         let requestFn: @convention(block) (String, JSValue?, JSValue?) -> JSValue = { [weak self] urlString, optionsValue, callback in
-            guard let self else { return JSValue(undefinedIn: self.context) }
-            let abort = JSValue(newObjectIn: self.context)!
+            guard let self, let ctx = self.context else { return JSValue(undefinedIn: nil) }
+            let abort = JSValue(newObjectIn: ctx)!
             var aborted = false
-            abort.setObject(JSValue(object: { () in aborted = true }, in: self.context)!,
-                            forKeyedSubscript: "abort" as NSCopying)
+            abort["abort"] = JSValue(object: { () in aborted = true }, in: ctx)
+
             guard let url = URL(string: urlString) else {
-                self.safeCall(callback, with: ["网络地址错误", NSNull()])
+                self.safeCall(callback, ["网络地址错误", NSNull()])
                 return abort
             }
             let opts = optionsValue?.toDictionary() ?? [:]
@@ -148,7 +143,7 @@ final class LXSourceEngine {
                 self.queue.async {
                     guard !aborted else { return }
                     if let error {
-                        self.safeCall(callback, with: [error.localizedDescription, NSNull()])
+                        self.safeCall(callback, [error.localizedDescription, NSNull()])
                         return
                     }
                     let http = response as? HTTPURLResponse
@@ -164,53 +159,44 @@ final class LXSourceEngine {
                         "body": bodyString,
                         "url": response?.url?.absoluteString ?? urlString,
                     ]
-                    self.safeCall(callback, with: [NSNull(), resp])
+                    self.safeCall(callback, [NSNull(), resp])
                 }
             }
             task.resume()
-            abort.setObject(JSValue(object: { () in aborted = true; task.cancel() }, in: self.context)!,
-                            forKeyedSubscript: "abort" as NSCopying)
+            abort["abort"] = JSValue(object: { () in aborted = true; task.cancel() }, in: ctx)
             return abort
         }
-        context?.setObject(JSValue(object: requestFn, in: context)!,
-                           forKeyedSubscript: "request" as NSCopying)
+        ctx["request"] = JSValue(object: requestFn, in: ctx)
 
         // on(event, handler)
         let onFn: @convention(block) (String, JSValue?) -> JSValue = { [weak self] event, handler in
-            guard let self, let ctx = self.context else { return JSValue(undefinedIn: self?.context) }
+            guard let self, let ctx = self.context else { return JSValue(undefinedIn: nil) }
             if event == "request", let handler {
-                self.queue.async { self.requestHandlers["__pending__"] = handler }
+                self.requestHandlers[".__pending__"] = handler
             }
             return JSValue(object: true, in: ctx)!
         }
-        context?.setObject(JSValue(object: onFn, in: context)!,
-                           forKeyedSubscript: "on" as NSCopying)
+        ctx["on"] = JSValue(object: onFn, in: ctx)
 
         // send(event, data)
         let sendFn: @convention(block) (String, JSValue?) -> JSValue = { [weak self] event, data in
-            guard let self, let ctx = self.context else { return JSValue(undefinedIn: self?.context) }
+            guard let self, let ctx = self.context else { return JSValue(undefinedIn: nil) }
             if event == "inited" {
                 let info = data?.toDictionary() ?? [:]
-                self.queue.async {
-                    if let sources = info["sources"] as? [String: Any] {
-                        for (key, value) in sources {
-                            if let s = value as? [String: Any], let actions = s["actions"] as? [String] {
-                                self.capabilities[key] = actions
-                                if let handler = self.requestHandlers["__pending__"] {
-                                    self.requestHandlers[key] = handler
-                                }
-                            }
+                if let sources = info["sources"] as? [String: Any] {
+                    for (key, value) in sources {
+                        guard let s = value as? [String: Any] else { continue }
+                        let actions = (s["actions"] as? [String]) ?? []
+                        self.capabilities[key] = actions
+                        if let handler = self.requestHandlers[".__pending__"] {
+                            self.requestHandlers[key] = handler
                         }
                     }
-                    self.didInit = true
-                    for waiter in self.initWaiters.values { waiter.resume() }
-                    self.initWaiters.removeAll()
                 }
             }
             return JSValue(object: true, in: ctx)!
         }
-        context?.setObject(JSValue(object: sendFn, in: context)!,
-                           forKeyedSubscript: "send" as NSCopying)
+        ctx["send"] = JSValue(object: sendFn, in: ctx)
 
         // setTimeout / clearTimeout
         let setTimerFn: @convention(block) (JSValue?, NSNumber?) -> NSNumber = { [weak self] fn, delay in
@@ -219,7 +205,7 @@ final class LXSourceEngine {
             let id = self.timerCounter
             let work = DispatchWorkItem {
                 self.queue.async {
-                    if let fn, fn.isObject { fn.call(withArguments: nil) }
+                    fn?.call(withArguments: nil)
                     self.timers.removeValue(forKey: id)
                 }
             }
@@ -228,82 +214,52 @@ final class LXSourceEngine {
             self.queue.asyncAfter(deadline: .now() + ms, execute: work)
             return NSNumber(value: id)
         }
-        context?.setObject(JSValue(object: setTimerFn, in: context)!,
-                           forKeyedSubscript: "setTimeout" as NSCopying)
+        ctx["setTimeout"] = JSValue(object: setTimerFn, in: ctx)
+
         let clearTimerFn: @convention(block) (NSNumber?) -> Void = { [weak self] num in
             guard let self, let num else { return }
-            let id = num.int32Value
-            self.queue.async { self.timers.removeValue(forKey: id)?.cancel() }
+            self.timers.removeValue(forKey: num.int32Value)?.cancel()
         }
-        context?.setObject(JSValue(object: clearTimerFn, in: context)!,
-                           forKeyedSubscript: "clearTimeout" as NSCopying)
+        ctx["clearTimeout"] = JSValue(object: clearTimerFn, in: ctx)
 
         // atob / btoa
-        let btoaFn: @convention(block) (String) -> String = { text in
-            Data(text.utf8).base64EncodedString()
+        let btoaFn: @convention(block) (String) -> String = { Data($0.utf8).base64EncodedString() }
+        let atobFn: @convention(block) (String) -> String = {
+            guard let d = Data(base64Encoded: $0) else { return "" }
+            return String(data: d, encoding: .utf8) ?? ""
         }
-        let atobFn: @convention(block) (String) -> String = { text in
-            guard let data = Data(base64Encoded: text) else { return "" }
-            return String(data: data, encoding: .utf8) ?? ""
-        }
-        context?.setObject(JSValue(object: btoaFn, in: context)!,
-                           forKeyedSubscript: "btoa" as NSCopying)
-        context?.setObject(JSValue(object: atobFn, in: context)!,
-                           forKeyedSubscript: "atob" as NSCopying)
-
-        // Math.random 已有；Date.now 由 JSCore 原生提供。
+        ctx["btoa"] = JSValue(object: btoaFn, in: ctx)
+        ctx["atob"] = JSValue(object: atobFn, in: ctx)
     }
 
-    /// 回调安全调用：切回 JS 队列再把 [error, data] 作为参数调用。
-    private func safeCall(_ callback: JSValue?, with args: [Any]) {
+    /// 回调安全调用：统一切到 JS 队列执行。
+    private func safeCall(_ callback: JSValue?, _ args: [Any]) {
         guard let callback else { return }
-        if DispatchQueue.currentLabel == self.queue.label {
-            callback.call(withArguments: args)
-        } else {
-            self.queue.async { callback.call(withArguments: args) }
-        }
+        queue.async { callback.call(withArguments: args) }
     }
 
     // MARK: - 脚本管理
 
-    /// 加载单个音源脚本。脚本头注释里的 @name/@version 等会被解析为元信息。
-    func loadScript(_ raw: String, key: String) async throws -> LXSourceMeta {
-        try await withCheckedThrowingContinuation { cont in
+    /// 加载单个音源脚本。重建 JSContext 后同步执行脚本；脚本里的 on/send
+    /// 会在同一 queue 上排队执行，resolve 时也走 queue.sync，时序天然正确。
+    func loadScript(_ raw: String, key: String) async {
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             queue.async {
-                self.didInit = false
                 self.requestHandlers.removeAll()
                 self.capabilities.removeAll()
+                self.installShim()
                 self.context?.evaluateScript(raw)
-                // 脚本同步执行后应调用 send('inited', ...) 或注册 on('request')。
-                // 部分脚本 send 是异步 resolve，这里给一个短等待窗口。
-                self.waitForInit { cont.resume() }
+                cont.resume()
             }
         }
-        return parseMeta(raw, key: key)
     }
 
-    /// 等待最多 1.5 秒的 inited；超时也放行（老脚本可能不 send inited，只 on request）。
-    private func waitForInit(completion: @escaping () -> Void) {
-        if didInit || !requestHandlers.isEmpty { completion(); return }
-        initWaiterCounter += 1
-        let id = initWaiterCounter
-        initWaiters[id] = CheckedContinuation<Void, Never> {
-            completion()
-        }()
-        // 兜底超时
-        queue.asyncAfter(deadline: .now() + 1.5) { [weak self] in
-            guard let self, let waiter = self.initWaiters.removeValue(forKey: id) else { return }
-            waiter.resume()
-        }
-    }
-
-    private func parseMeta(_ raw: String, key: String) -> LXSourceMeta {
+    static func parseMeta(_ raw: String, key: String) -> LXSourceMeta {
         func field(_ name: String) -> String {
-            let pattern = "@\(name)\\s+(.+)"
-            guard let regex = try? NSRegularExpression(pattern: pattern, options: []),
-                  let match = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)),
-                  let range = Range(match.range(at: 1), in: raw) else { return "" }
-            return String(raw[range]).trimmingCharacters(in: .whitespaces)
+            guard let regex = try? NSRegularExpression(pattern: "@\(name)\\s+(.+)", options: []),
+                  let m = regex.firstMatch(in: raw, range: NSRange(raw.startIndex..., in: raw)),
+                  let r = Range(m.range(at: 1), in: raw) else { return "" }
+            return String(raw[r]).trimmingCharacters(in: .whitespaces)
         }
         return LXSourceMeta(
             key: key,
@@ -315,42 +271,37 @@ final class LXSourceEngine {
         )
     }
 
-    /// 解析播放地址。会遍历当前脚本上报的全部平台（kw/kg/tx/wy/mg...）逐一尝试，
-    /// 返回第一个可用的 https 地址。musicInfo 尽量塞全字段（参见 Track.lxMusicInfo）。
+    /// 解析播放地址：遍历当前脚本上报的全部平台（kw/kg/tx/wy/mg...）逐一尝试，
+    /// 返回第一个可用的 https 地址。
     func resolve(musicInfo: [String: Any], quality: String = "128k") async throws -> LXResolvedURL {
         let platforms = queue.sync { Array(capabilities.keys).sorted() }
-        let fallbackHandler = queue.sync { requestHandlers["__pending__"] }
-        guard !platforms.isEmpty || fallbackHandler != nil else {
-            throw LXSourceError.notInitialized
-        }
-        // 若脚本未 send inited（无平台信息），用占位 source 走唯一 handler。
+        let hasFallback = queue.sync { requestHandlers[".__pending__"] != nil }
+        guard !platforms.isEmpty || hasFallback else { throw LXSourceError.notInitialized }
+
         let candidates = platforms.isEmpty ? ["kw"] : platforms
         for platform in candidates {
-            if let result = try? await resolveOne(platform: platform, musicInfo: musicInfo, quality: quality) {
+            if let result = await resolveOne(platform: platform, musicInfo: musicInfo, quality: quality) {
                 return result
             }
         }
         throw LXSourceError.noURL
     }
 
-    /// 单个平台的解析。失败返回 nil，由调用方决定继续尝试下一个平台。
-    private func resolveOne(platform: String, musicInfo: [String: Any], quality: String) async throws -> LXResolvedURL? {
-        try await withCheckedThrowingContinuation { cont in
+    /// 单平台解析。失败返回 nil，由调用方决定继续尝试下一个平台。
+    private func resolveOne(platform: String, musicInfo: [String: Any], quality: String) async -> LXResolvedURL? {
+        await withCheckedContinuation { (cont: CheckedContinuation<LXResolvedURL?, Never>) in
             queue.async {
-                guard let handler = self.requestHandlers[platform] ?? self.requestHandlers["__pending__"] else {
+                guard let ctx = self.context,
+                      let handler = self.requestHandlers[platform] ?? self.requestHandlers[".__pending__"] else {
                     cont.resume(returning: nil)
                     return
                 }
                 let payload: [String: Any] = [
                     "source": platform,
                     "action": "musicUrl",
-                    "info": [
-                        "type": quality,
-                        "musicInfo": musicInfo,
-                    ],
+                    "info": ["type": quality, "musicInfo": musicInfo],
                 ]
-                let arg = JSValue(object: payload, in: self.context)!
-                guard let promise = handler.call(withArguments: [arg]) else {
+                guard let promise = handler.call(withArguments: [JSValue(object: payload, in: ctx)!]) else {
                     cont.resume(returning: nil)
                     return
                 }
@@ -360,7 +311,8 @@ final class LXSourceEngine {
                     finished = true
                     cont.resume(returning: result)
                 }
-                let then = promise.objectForKeyedSubscript("then")
+
+                let then = promise["then"]
                 if then?.isObject == true || then?.isCallable == true {
                     let onFulfilled: @convention(block) (JSValue?) -> Void = { [weak self] value in
                         guard let self else { return }
@@ -373,14 +325,11 @@ final class LXSourceEngine {
                             finish(LXResolvedURL(url: url, sourceName: platform))
                         }
                     }
-                    let onRejected: @convention(block) (JSValue?) -> Void = { _ in
-                        finish(nil)
-                    }
+                    let onRejected: @convention(block) (JSValue?) -> Void = { _ in finish(nil) }
                     promise.invokeMethod("then", withArguments: [
-                        JSValue(object: onFulfilled, in: self.context)!,
-                        JSValue(object: onRejected, in: self.context)!,
+                        JSValue(object: onFulfilled, in: ctx)!,
+                        JSValue(object: onRejected, in: ctx)!,
                     ])
-                    // 兜底：脚本 Promise 永不 settle 时超时返回 nil
                     self.queue.asyncAfter(deadline: .now() + 20) { finish(nil) }
                 } else {
                     let text = promise.toString() ?? ""
@@ -403,7 +352,7 @@ final class LXSourceEngine {
 
 extension Track {
     /// 把 kumone 的统一 Track 转音源脚本期望的 musicInfo 字典。
-    /// 各音源 idField 不同（id / hash / songmid / rid / mid），尽量都给上。
+    /// 各音源 idField 不同（id/hash/songmid/rid/mid），尽量都给上。
     var lxMusicInfo: [String: Any] {
         var info: [String: Any] = [
             "id": String(id),

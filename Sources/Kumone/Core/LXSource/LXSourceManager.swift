@@ -48,10 +48,8 @@ final class LXSourceManager: ObservableObject {
             .unicodeScalars.filter { validKey.contains($0) }
             .map { String($0) }.joined()
         let key = baseKey.isEmpty ? "source" : baseKey
-        guard let meta = try? await engine.loadScript(trimmed, key: key) else {
-            await MainActor.run { lastError = "脚本初始化失败" }
-            return nil
-        }
+        await engine.loadScript(trimmed, key: key)
+        let meta = LXSourceEngine.parseMeta(trimmed, key: key)
         try? trimmed.write(to: fileURL(for: key), atomically: true, encoding: .utf8)
         await MainActor.run {
             sources.removeAll { $0.key == key }
@@ -109,7 +107,7 @@ final class LXSourceManager: ObservableObject {
         for key in enabledKeys.sorted() {
             guard let meta = sources.first(where: { $0.key == key }) else { continue }
             // 懒加载脚本到引擎（每次解析前 reload，避免脚本状态污染）
-            _ = try? await engine.loadScript(meta.rawScript, key: key)
+            await engine.loadScript(meta.rawScript, key: key)
             // 引擎会遍历该脚本上报的所有平台（kw/kg/tx/wy/mg...）
             if let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality) {
                 log.info("LX resolved \(track.id) via \(key, privacy: .public) platform=\(result.sourceName, privacy: .public)")

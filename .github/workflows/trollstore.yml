@@ -32,20 +32,27 @@ jobs:
 
       - name: Resolve SPM packages
         run: |
+          set -o pipefail
           xcodebuild -resolvePackageDependencies \
             -workspace ios/KumoneIOS.xcworkspace -scheme KumoneIOS 2>&1 | tail -20
 
       - name: Build unsigned iOS IPA
         run: |
           mkdir -p dist
+          # 关键：不用 `| tail` 吞掉 xcodebuild 的退出码。直接输出到日志，
+          # 编译失败时 bash -e 会立即中止，绝不会打出空 IPA。
           xcodebuild -workspace ios/KumoneIOS.xcworkspace -scheme KumoneIOS \
             -configuration Release -destination 'generic/platform=iOS' \
             -derivedDataPath "$RUNNER_TEMP/ios-dd" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
             CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
-            build 2>&1 | tail -60
+            build
           APP="$RUNNER_TEMP/ios-dd/Build/Products/Release-iphoneos/KumoneIOS.app"
+          # 校验：app 目录必须存在且包含 Mach-O 可执行文件
           test -d "$APP" || { echo "app not found"; exit 1; }
+          BIN=$(find "$APP" -maxdepth 1 -type f -perm -u+x | head -1)
+          test -n "$BIN" || { echo "no executable in app"; exit 1; }
+          echo "executable: $BIN ($(stat -f%z "$BIN") bytes)"
           mkdir -p "$RUNNER_TEMP/payload/Payload"
           cp -R "$APP" "$RUNNER_TEMP/payload/Payload/"
           (cd "$RUNNER_TEMP/payload" && zip -qry "$GITHUB_WORKSPACE/dist/Kumone-LX.ipa" Payload)
