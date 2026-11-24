@@ -50,11 +50,13 @@ struct DailySnapshot: Codable, Hashable, Identifiable {
         // 用 JSON 重建以带上 album/picUrl/duration（Track 只有 decode 初始化器）
         tracks = legacy.compactMap { t in
             let artistNames = t.artists.split(separator: "/").map(String.init)
+            var albumDict: [String: Any] = ["id": 0, "name": t.album]
+            if let pic = t.picURL { albumDict["picUrl"] = pic }
             let json: [String: Any] = [
                 "id": t.songID,
                 "name": t.name,
                 "ar": artistNames.map { ["id": 0, "name": $0] },
-                "al": ["id": 0, "name": t.album, "picUrl": t.picURL ?? NSNull()],
+                "al": albumDict,
                 "dt": t.durationMS,
             ]
             guard let data = try? JSONSerialization.data(withJSONObject: json),
