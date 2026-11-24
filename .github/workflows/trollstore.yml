@@ -8,87 +8,54 @@ on:
 permissions:
   contents: write
 
+# 完全沿用 kumone 原版 release.yml 的 iOS 构建方式：
+# xcodebuild（CODE_SIGNING_ALLOWED=NO）→ cp 到 Payload → zip。
+# 产出的是 unsigned IPA，TrollStore 就是用来装 unsigned IPA 的
+# （签名由 TrollStore 在设备上通过 CoreTrust 完成，构建端不需要 ldid/codesign）。
 jobs:
   build:
-    runs-on: macos-latest
+    runs-on: macos-26
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Select Xcode
         run: |
           xcodebuild -version
           echo "SDK $(xcrun --show-sdk-version)"
 
-      - name: Install ldid (for TrollStore pseudo-signing)
-        run: brew install ldid
+      - name: Derive version
+        run: |
+          echo "BUILD_NUMBER=$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
 
       - name: Resolve SPM packages
         run: |
-          cd ios
           xcodebuild -resolvePackageDependencies \
-            -workspace KumoneIOS.xcworkspace -scheme KumoneIOS 2>&1 | tail -20
+            -workspace ios/KumoneIOS.xcworkspace -scheme KumoneIOS 2>&1 | tail -20
 
-      - name: Build unsigned iOS app
+      - name: Build unsigned iOS IPA
         run: |
-          mkdir -p build
+          mkdir -p dist
           xcodebuild -workspace ios/KumoneIOS.xcworkspace -scheme KumoneIOS \
             -configuration Release -destination 'generic/platform=iOS' \
-            -derivedDataPath "$PWD/build/DerivedData" \
+            -derivedDataPath "$RUNNER_TEMP/ios-dd" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            CURRENT_PROJECT_VERSION="$(git rev-list --count HEAD)" \
+            CURRENT_PROJECT_VERSION="$BUILD_NUMBER" \
             build 2>&1 | tail -60
-
-      - name: Locate .app
-        id: app
-        run: |
-          APP=$(find "$PWD/build/DerivedData/Build/Products" -name 'KumoneIOS.app' -type d | head -1)
-          test -n "$APP" && test -d "$APP" || { echo "app not found"; exit 1; }
-          echo "APP=$APP" >> "$GITHUB_ENV"
-          echo "path=$APP"
-          echo "=== app 内容 ==="
-          ls -la "$APP" | head -30
-
-      - name: Pseudo-sign with ldid (TrollStore CoreTrust)
-        run: |
-          # 用 entitlements 伪签名可执行文件，TrollStore 靠 CoreTrust bug 安装，无需开发者证书
-          # 生成一份干净的 entitlements（ldid 对 XML 注释敏感，原文件含大量注释）
-          ENT="$GITHUB_WORKSPACE/ent-clean.plist"
-          printf '%s\n' \
-            '<?xml version="1.0" encoding="UTF-8"?>' \
-            '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
-            '<plist version="1.0">' \
-            '<dict>' \
-            '  <key>get-task-allow</key>' \
-            '  <true/>' \
-            '</dict>' \
-            '</plist>' > "$ENT"
-          plutil -lint "$ENT"
-          BIN="$APP/KumoneIOS"
-          ls -la "$BIN" "$ENT"
-          ldid -S"$ENT" "$BIN"
-          echo "ldid done"
-          # 确保后台音频 + ATS 已写入（工程 Info.plist 已含，这里兜底校验）
-          /usr/libexec/PlistBuddy -c "Print :UIBackgroundModes" "$APP/Info.plist" || \
-            /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$APP/Info.plist"
-          echo "signed"
-          codesign -d --entitlements - "$APP/KumoneIOS" 2>&1 | head -30 || true
-
-      - name: Package IPA
-        run: |
-          mkdir -p build/payload/Payload
-          cp -R "$APP" build/payload/Payload/
-          (cd build/payload && zip -qry "$GITHUB_WORKSPACE/Kumone-LX-trollstore.ipa" Payload)
-          ls -lh Kumone-LX-trollstore.ipa
+          APP="$RUNNER_TEMP/ios-dd/Build/Products/Release-iphoneos/KumoneIOS.app"
+          test -d "$APP" || { echo "app not found"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/payload/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/payload/Payload/"
+          (cd "$RUNNER_TEMP/payload" && zip -qry "$GITHUB_WORKSPACE/dist/Kumone-LX.ipa" Payload)
+          ls -lh dist/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: Kumone-LX-trollstore-ipa
-          path: Kumone-LX-trollstore.ipa
+          path: dist/Kumone-LX.ipa
           if-no-files-found: error
 
       - name: Publish to Release (on tag)
@@ -98,6 +65,6 @@ jobs:
         run: |
           gh release create "${GITHUB_REF_NAME}" \
             --title "Kumone-LX ${GITHUB_REF_NAME}" \
-            --notes "TrollStore 免签名 IPA。已集成 LX 自定义音源 + 每日推荐历史存档。" \
-            Kumone-LX-trollstore.ipa || \
-          gh release upload "${GITHUB_REF_NAME}" Kumone-LX-trollstore.ipa --clobber
+            --notes "TrollStore 免签名 IPA。基于 kumone，集成 LX 自定义音源 + 每日推荐历史存档。" \
+            dist/Kumone-LX.ipa || \
+          gh release upload "${GITHUB_REF_NAME}" dist/Kumone-LX.ipa --clobber

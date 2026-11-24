@@ -31,9 +31,11 @@
 ## 构建与安装
 
 - GitHub Actions（`.github/workflows/trollstore.yml`）：`push` 到 main 或手动触发，
-  在 macOS runner 上 `xcodebuild`（不签名）→ `ldid` 伪签名 → 打包 TrollStore IPA，上传 Artifact。
+  在 macOS runner 上 `xcodebuild`（`CODE_SIGNING_ALLOWED=NO`）→ 打包 unsigned IPA，上传 Artifact。
+  这与 kumone 原版 iOS 构建方式完全一致：构建端不签名、不做 ldid。
 - 打 tag（`v*`）时额外发布到 GitHub Release。
-- 安装：用 TrollStore 打开生成的 `Kumone-LX-trollstore.ipa`（TrollStore → Settings → Install IPA）。
+- 安装：用 TrollStore 打开生成的 `Kumone-LX.ipa`（TrollStore → Settings → Install IPA）。
+  TrollStore 负责在设备上用 CoreTrust 完成安装，所以 unsigned IPA 即可，无需开发者证书。
 
 ## 音源来源
 
