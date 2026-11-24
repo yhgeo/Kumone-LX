@@ -176,8 +176,34 @@ final class LXSourceManager: ObservableObject {
                             version: field("version"), description: field("description"), rawScript: raw)
     }
 
-    /// 用已启用的音源依次尝试解析歌曲播放地址。返回第一个成功者。
-    /// 按启用顺序逐个尝试；每个音源最多 2 秒，避免单个慢音源拖垮播放。
+    /// 验证音源返回的 URL 是否真的是可播音频，而不是网页/反爬提示/空响应。
+    /// 用 Range 请求只取前 2KB，检查状态码与 Content-Type，避免整段下载。
+    private func verifyAudioURL(_ url: URL) async -> Bool {
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue("bytes=0-2047", forHTTPHeaderField: "Range")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 3
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let http = response as? HTTPURLResponse else { return false }
+            // 200 或 206 才算有效
+            guard (200...206).contains(http.statusCode) else { return false }
+            let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+            // 明确是网页/JSON 的一律拒绝（反爬、错误页、登录跳转）
+            if contentType.contains("text/html") || contentType.contains("json")
+                || contentType.contains("text/plain") { return false }
+            // 有实体内容即可（音频常为 audio/* 或 application/octet-stream，
+            // 有的音源不给 Content-Type，靠返回字节判断）
+            return !data.isEmpty
+        } catch {
+            return false
+        }
+    }
+
+    /// 用已启用的音源依次尝试解析歌曲播放地址。返回第一个「验证可播」者。
+    /// 关键：音源返回的 URL 可能是无效网页/反爬地址（测试只看 scheme 会假阳性），
+    /// 必须先验证再采用，否则 AVPlayer 加载失败就跳过整首歌。
     func resolve(track: Track, quality: String = "128k") async -> LXResolvedURL? {
         let diag = PlaybackDiagnostics.shared
         let keys = enabledKeys
@@ -191,11 +217,17 @@ final class LXSourceManager: ObservableObject {
             // 每个音源整体 2 秒超时（引擎内部实现，避免 Swift 并发 Sendable 问题）
             let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality, timeout: 2)
             let elapsed = Date().timeIntervalSince(start)
-            if let result {
-                diag.log("音源", "✓ \(meta.name) key=\(key) platform=\(result.sourceName) 耗时\(String(format:"%.1f",elapsed))s host=\(result.url.host() ?? "?")")
+            guard let result else {
+                diag.log("音源", "✗ \(meta.name) key=\(key) 耗时\(String(format:"%.1f",elapsed))s 未返回URL")
+                continue
+            }
+            // 验证 URL 真是音频，过滤假阳性（幻音等返回的无效地址）
+            let valid = await verifyAudioURL(result.url)
+            if valid {
+                diag.log("音源", "✓ \(meta.name) key=\(key) platform=\(result.sourceName) 耗时\(String(format:"%.1f",elapsed))s host=\(result.url.host() ?? "?") 验证通过")
                 return result
             } else {
-                diag.log("音源", "✗ \(meta.name) key=\(key) 耗时\(String(format:"%.1f",elapsed))s 诊断=\(engine.diagnostic())")
+                diag.log("音源", "✗ \(meta.name) key=\(key) 返回URL验证失败 host=\(result.url.host() ?? "?") 换下一个音源")
             }
         }
         return nil
@@ -296,7 +328,8 @@ final class LXSourceManager: ObservableObject {
         for (idx, q) in Self.testQualities.enumerated() {
             if idx >= 2, firstOK == nil { break }
             let qStart = Date()
-            if let result = try? await engine.resolve(musicInfo: sample, quality: q, timeout: 2) {
+            if let result = try? await engine.resolve(musicInfo: sample, quality: q, timeout: 2),
+               await verifyAudioURL(result.url) {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: true, elapsed: e))
                 diag.log("测试", "\(meta.name) \(q) ✓ \(String(format:"%.1f",e))s platform=\(result.sourceName)")
@@ -305,7 +338,7 @@ final class LXSourceManager: ObservableObject {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: false, elapsed: e))
                 let d = engine.diagnostic()
-                diag.log("测试", "\(meta.name) \(q) ✗ \(String(format:"%.1f",e))s 诊断=\(d)")
+                diag.log("测试", "\(meta.name) \(q) ✗ \(String(format:"%.1f",e))s 验证失败/未返回 诊断=\(d)")
             }
         }
 
