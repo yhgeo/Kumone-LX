@@ -313,7 +313,8 @@ final class LXSourceEngine {
                 }
 
                 let then = promise.objectForKeyedSubscript("then" as NSString)
-                if then?.isObject == true || then?.isCallable == true {
+                // Promise 的 then 是 JS 函数，作为 JSValue 时 isObject 为 true。
+                if then != nil, then?.isNull != true, then?.isUndefined != true {
                     let onFulfilled: @convention(block) (JSValue?) -> Void = { [weak self] value in
                         guard let self else { return }
                         let text = value?.toString() ?? ""
