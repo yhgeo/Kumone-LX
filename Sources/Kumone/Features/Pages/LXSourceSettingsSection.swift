@@ -35,6 +35,22 @@ struct LXSourceSettingsSection: View {
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
+                            // 测试结果：延迟 + 各音质 ✓/✗（直接显示在列表中）
+                            if let r = manager.testCache[source.key] {
+                                HStack(spacing: 6) {
+                                    Image(systemName: r.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(r.ok ? .green : .red)
+                                    Text(String(format: "%.1fs", r.elapsed))
+                                        .font(.system(size: 10, design: .monospaced))
+                                        .foregroundStyle(r.ok ? .green : .secondary)
+                                    ForEach(r.qualityResults) { q in
+                                        Text("\(q.quality) \(q.ok ? "✓" : "✗")")
+                                            .font(.system(size: 9))
+                                            .foregroundStyle(q.ok ? .green : .secondary)
+                                    }
+                                }
+                            }
                         }
                     }
                     Button {
@@ -93,13 +109,13 @@ struct LXSourceSettingsSection: View {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
 
-            Text("用《晴天》实测各音质（320k/128k/flac/flac24bit），每个音质最多 3 秒。测试后可用且快的排前面，不通的自动停用。")
+            Text("用《晴天》实测：先测 320k/128k，都失败即判不可用（跳过无损档），每档最多 2 秒。结果直接显示在列表；可用且快的排前面，不通的自动停用。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {
             Text("LX 自定义音源")
         } footer: {
-            Text("播放选源规则：网易云官方拿不到地址时，按下方列表从上到下逐个尝试 LX 音源，第一个解析成功的生效；LX 全失败再用内置解锁源。测试后列表按延迟自动排序（快的优先），不通的已停用。每个音源最多 3 秒。")
+            Text("播放选源规则：网易云官方拿不到地址时，按下方列表从上到下逐个尝试 LX 音源，第一个解析成功的生效；LX 全失败再用内置解锁源。测试后列表按延迟自动排序（快的优先），不通的已停用。每个音源最多 2 秒。")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }

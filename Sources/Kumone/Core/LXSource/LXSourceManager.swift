@@ -13,6 +13,8 @@ final class LXSourceManager: ObservableObject {
 
     @Published private(set) var sources: [LXSourceMeta] = []
     @Published private(set) var enabledKeys: [String] = []
+    /// 最近一次测试结果，按音源 key 索引，供设置页列表直接展示延迟/音质。
+    @Published var testCache: [String: TestResult] = [:]
     @Published var lastError: String?
 
     private let log = Logger(subsystem: "sb.moe.kumone", category: "lx-source-mgr")
@@ -175,7 +177,7 @@ final class LXSourceManager: ObservableObject {
     }
 
     /// 用已启用的音源依次尝试解析歌曲播放地址。返回第一个成功者。
-    /// 按启用顺序逐个尝试；每个音源最多 3 秒，避免单个慢音源拖垮播放。
+    /// 按启用顺序逐个尝试；每个音源最多 2 秒，避免单个慢音源拖垮播放。
     func resolve(track: Track, quality: String = "128k") async -> LXResolvedURL? {
         let diag = PlaybackDiagnostics.shared
         let keys = enabledKeys
@@ -186,8 +188,8 @@ final class LXSourceManager: ObservableObject {
             await engine.loadScript(meta.rawScript, key: key)
             // 异步 inited 的音源给一点初始化时间
             try? await Task.sleep(for: .milliseconds(200))
-            // 每个音源整体 3 秒超时（引擎内部实现，避免 Swift 并发 Sendable 问题）
-            let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality, timeout: 3)
+            // 每个音源整体 2 秒超时（引擎内部实现，避免 Swift 并发 Sendable 问题）
+            let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality, timeout: 2)
             let elapsed = Date().timeIntervalSince(start)
             if let result {
                 diag.log("音源", "✓ \(meta.name) key=\(key) platform=\(result.sourceName) 耗时\(String(format:"%.1f",elapsed))s host=\(result.url.host() ?? "?")")
@@ -280,16 +282,21 @@ final class LXSourceManager: ObservableObject {
         let diag = PlaybackDiagnostics.shared
         diag.log("测试", "开始测试音源 \(meta.name) key=\(key)")
         await engine.loadScript(meta.rawScript, key: key)
-        try? await Task.sleep(for: .milliseconds(300))
+        // 异步 inited 的音源最多轮询 150ms 等平台上报，避免固定 300ms 浪费。
+        for _ in 0..<3 where engine.availableSources().isEmpty {
+            try? await Task.sleep(for: .milliseconds(50))
+        }
         let platformCount = engine.availableSources().count
         diag.log("测试", "\(meta.name) 上报平台 \(platformCount) 个")
 
         var qualityResults: [QualityResult] = []
         var firstOK: LXResolvedURL?
-        // 逐音质测，每个最多 3 秒。
-        for q in Self.testQualities {
+        // 优化：先测 320k、128k 两档；都失败则判定不可用，跳过 flac/flac24bit
+        // （不可能一个音源既不支持有损又支持无损）。每档最多 2 秒。
+        for (idx, q) in Self.testQualities.enumerated() {
+            if idx >= 2, firstOK == nil { break }
             let qStart = Date()
-            if let result = try? await engine.resolve(musicInfo: sample, quality: q, timeout: 3) {
+            if let result = try? await engine.resolve(musicInfo: sample, quality: q, timeout: 2) {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: true, elapsed: e))
                 diag.log("测试", "\(meta.name) \(q) ✓ \(String(format:"%.1f",e))s platform=\(result.sourceName)")
@@ -297,7 +304,8 @@ final class LXSourceManager: ObservableObject {
             } else {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: false, elapsed: e))
-                diag.log("测试", "\(meta.name) \(q) ✗ \(String(format:"%.1f",e))s 诊断=\(engine.diagnostic())")
+                let d = engine.diagnostic()
+                diag.log("测试", "\(meta.name) \(q) ✗ \(String(format:"%.1f",e))s 诊断=\(d)")
             }
         }
 
@@ -313,13 +321,16 @@ final class LXSourceManager: ObservableObject {
                 ? "全部音质解析失败（上报平台 \(platformCount) 个）"
                 : diag
         }
-        return TestResult(key: key,
-                          name: meta.name.isEmpty ? key : meta.name,
-                          ok: ok,
-                          elapsed: Date().timeIntervalSince(start),
-                          platform: firstOK?.sourceName,
-                          message: message,
-                          qualityResults: qualityResults)
+        let result = TestResult(key: key,
+                                name: meta.name.isEmpty ? key : meta.name,
+                                ok: ok,
+                                elapsed: Date().timeIntervalSince(start),
+                                platform: firstOK?.sourceName,
+                                message: message,
+                                qualityResults: qualityResults)
+        // 立即缓存到管理器，设置页列表可实时显示延迟与音质。
+        Task { @MainActor in self.testCache[key] = result }
+        return result
     }
 
     ///  dlopen 后各音源 support 的 quality 名称可能不同，这里统一映射 kumone 音质到 LX 音质。
