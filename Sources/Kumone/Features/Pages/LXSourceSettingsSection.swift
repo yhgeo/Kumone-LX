@@ -21,7 +21,7 @@ struct LXSourceSettingsSection: View {
 
     var body: some View {
         Section {
-            ForEach(manager.sources) { source in
+            ForEach(manager.orderedSources) { source in
                 HStack(spacing: 10) {
                     Toggle(isOn: Binding(
                         get: { manager.enabledKeys.contains(source.key) },
@@ -93,13 +93,13 @@ struct LXSourceSettingsSection: View {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
 
-            Text("用《晴天》实测每个音源能否解析播放地址。绿色✓可用，红色✗不可用。仅导入可信来源。")
+            Text("用《晴天》实测各音质（320k/128k/flac/flac24bit），每个音质最多 3 秒。测试后可用且快的排前面，不通的自动停用。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {
             Text("LX 自定义音源")
         } footer: {
-            Text("播放选源规则：网易云官方拿不到地址时，按下方启用顺序从上到下逐个尝试 LX 音源，第一个解析成功的生效；LX 全失败再用内置解锁源（酷狗/酷我）。测试✓的音源才可靠。每个音源最多 8 秒，避免卡住。")
+            Text("播放选源规则：网易云官方拿不到地址时，按下方列表从上到下逐个尝试 LX 音源，第一个解析成功的生效；LX 全失败再用内置解锁源。测试后列表按延迟自动排序（快的优先），不通的已停用。每个音源最多 3 秒。")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
@@ -151,7 +151,10 @@ struct LXSourceSettingsSection: View {
     private var testResultSheet: some View {
         NavigationStack {
             List {
-                ForEach(testResults) { r in
+                ForEach(testResults.sorted { a, b in
+                    if a.ok != b.ok { return a.ok }
+                    return a.elapsed < b.elapsed
+                }) { r in
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: r.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
                             .foregroundStyle(r.ok ? .green : .red)
@@ -163,6 +166,14 @@ struct LXSourceSettingsSection: View {
                             Text(r.message)
                                 .font(.caption2).foregroundStyle(.secondary)
                                 .textSelection(.enabled)
+                            // 各音质测试结果
+                            HStack(spacing: 8) {
+                                ForEach(r.qualityResults) { q in
+                                    Text("\(q.quality) \(q.ok ? "✓" : "✗")")
+                                        .font(.system(size: 10))
+                                        .foregroundStyle(q.ok ? .green : .secondary)
+                                }
+                            }
                         }
                     }
                     .padding(.vertical, 4)
@@ -182,22 +193,29 @@ struct LXSourceSettingsSection: View {
         await MainActor.run { testingKey = key }
         let result = await manager.testSource(key)
         await MainActor.run {
+            let disabled = manager.applyTestResults([result])
             testingKey = nil
             testResults = [result]
             showTestResult = true
+            if !disabled.isEmpty { manager.lastError = "该音源不通，已自动停用" }
         }
     }
 
     private func testAll() async {
         await MainActor.run { isTestingAll = true }
         var results: [LXSourceManager.TestResult] = []
-        for source in manager.sources {
+        for source in manager.orderedSources {
             results.append(await manager.testSource(source.key))
         }
         await MainActor.run {
             isTestingAll = false
+            // 应用结果：成功且快的排前面，不通的自动取消启用
+            let disabled = manager.applyTestResults(results)
             testResults = results
             showTestResult = true
+            if !disabled.isEmpty {
+                manager.lastError = "已自动停用 \(disabled.count) 个不通的音源：\(disabled.prefix(4).joined(separator: "、"))"
+            }
         }
     }
 

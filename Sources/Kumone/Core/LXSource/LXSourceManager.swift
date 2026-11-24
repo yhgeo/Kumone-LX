@@ -12,7 +12,7 @@ final class LXSourceManager: ObservableObject {
     static let shared = LXSourceManager()
 
     @Published private(set) var sources: [LXSourceMeta] = []
-    @Published private(set) var enabledKeys: Set<String> = []
+    @Published private(set) var enabledKeys: [String] = []
     @Published var lastError: String?
 
     private let log = Logger(subsystem: "sb.moe.kumone", category: "lx-source-mgr")
@@ -27,7 +27,7 @@ final class LXSourceManager: ObservableObject {
         try? fm.createDirectory(at: root, withIntermediateDirectories: true)
         loadPersisted()
         let saved = UserDefaults.standard.stringArray(forKey: enabledKey) ?? []
-        enabledKeys = Set(saved)
+        enabledKeys = saved
     }
 
     private func fileURL(for key: String) -> URL {
@@ -75,7 +75,7 @@ final class LXSourceManager: ObservableObject {
                 sources.append(meta)
             }
             sources.sort { $0.key < $1.key }
-            enabledKeys.insert(key)
+            if !enabledKeys.contains(key) { enabledKeys.append(key) }
             persistEnabled()
             lastError = nil
         }
@@ -138,17 +138,17 @@ final class LXSourceManager: ObservableObject {
     func removeSource(_ key: String) {
         try? fm.removeItem(at: fileURL(for: key))
         sources.removeAll { $0.key == key }
-        enabledKeys.remove(key)
+        enabledKeys.removeAll { $0 == key }
         persistEnabled()
     }
 
     func setEnabled(_ key: String, enabled: Bool) {
-        if enabled { enabledKeys.insert(key) } else { enabledKeys.remove(key) }
+        if enabled { if !enabledKeys.contains(key) { enabledKeys.append(key) } } else { enabledKeys.removeAll { $0 == key } }
         persistEnabled()
     }
 
     private func persistEnabled() {
-        UserDefaults.standard.set(Array(enabledKeys).sorted(), forKey: enabledKey)
+        UserDefaults.standard.set(enabledKeys, forKey: enabledKey)
     }
 
     private func loadPersisted() {
@@ -175,10 +175,10 @@ final class LXSourceManager: ObservableObject {
     }
 
     /// 用已启用的音源依次尝试解析歌曲播放地址。返回第一个成功者。
-    /// 按启用顺序逐个尝试；每个音源最多 8 秒，避免单个慢音源拖垮播放。
+    /// 按启用顺序逐个尝试；每个音源最多 3 秒，避免单个慢音源拖垮播放。
     func resolve(track: Track, quality: String = "128k") async -> LXResolvedURL? {
         let diag = PlaybackDiagnostics.shared
-        let keys = enabledKeys.sorted()
+        let keys = enabledKeys
         diag.log("音源", "播放解析启用音源 \(keys.count) 个: \(keys.joined(separator: ","))")
         for key in keys {
             guard let meta = sources.first(where: { $0.key == key }) else { continue }
@@ -186,8 +186,8 @@ final class LXSourceManager: ObservableObject {
             await engine.loadScript(meta.rawScript, key: key)
             // 异步 inited 的音源给一点初始化时间
             try? await Task.sleep(for: .milliseconds(200))
-            // 每个音源整体 8 秒超时（引擎内部实现，避免 Swift 并发 Sendable 问题）
-            let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality, timeout: 8)
+            // 每个音源整体 3 秒超时（引擎内部实现，避免 Swift 并发 Sendable 问题）
+            let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality, timeout: 3)
             let elapsed = Date().timeIntervalSince(start)
             if let result {
                 diag.log("音源", "✓ \(meta.name) key=\(key) platform=\(result.sourceName) 耗时\(String(format:"%.1f",elapsed))s host=\(result.url.host() ?? "?")")
@@ -199,6 +199,14 @@ final class LXSourceManager: ObservableObject {
         return nil
     }
 
+    /// 单个音质的测试结果。
+    struct QualityResult: Identifiable {
+        let id = UUID()
+        let quality: String
+        let ok: Bool
+        let elapsed: TimeInterval
+    }
+
     /// 音源可用性测试结果。
     struct TestResult: Identifiable {
         let id = UUID()
@@ -208,15 +216,60 @@ final class LXSourceManager: ObservableObject {
         let elapsed: TimeInterval
         let platform: String?
         let message: String
+        var qualityResults: [QualityResult] = []
     }
 
-    /// 对单个音源做实测：加载脚本 -> 用样例歌解析 -> 记录平台/耗时/结果。
+    /// 测试用的音质列表（与 Common 设置对齐）。
+    static let testQualities = ["320k", "128k", "flac", "flac24bit"]
+
+    /// 测试完成后应用结果：按"成功优先、延迟从低到高"重排启用顺序；
+    /// 完全不通的音源自动取消启用。返回被禁用的音源名列表。
+    @discardableResult
+    func applyTestResults(_ results: [TestResult]) -> [String] {
+        let okByKey = Dictionary(uniqueKeysWithValues: results.map { ($0.key, $0) })
+        // 失败音源取消启用
+        var disabled: [String] = []
+        for r in results where !r.ok {
+            if enabledKeys.contains(r.key) {
+                enabledKeys.removeAll { $0 == r.key }
+                disabled.append(r.name)
+            }
+        }
+        // 成功音源按耗时升序排到前面
+        enabledKeys.sort { a, b in
+            let ra = okByKey[a], rb = okByKey[b]
+            switch (ra?.ok, rb?.ok) {
+            case (true, true): return ra!.elapsed < rb!.elapsed
+            case (true, false): return true
+            case (false, true): return false
+            default: return a < b
+            }
+        }
+        // sources 也按同一顺序排，UI 顺序 = 播放顺序
+        sources.sort { a, b in
+            let ia = enabledKeys.firstIndex(of: a.key) ?? Int.max
+            let ib = enabledKeys.firstIndex(of: b.key) ?? Int.max
+            return ia < ib
+        }
+        persistEnabled()
+        return disabled
+    }
+
+    /// 按启用顺序排列的音源（UI 展示用）。
+    var orderedSources: [LXSourceMeta] {
+        sources.sorted { a, b in
+            let ia = enabledKeys.firstIndex(of: a.key) ?? Int.max
+            let ib = enabledKeys.firstIndex(of: b.key) ?? Int.max
+            return ia == ib ? a.key < b.key : ia < ib
+        }
+    }
+
+    /// 对单个音源做实测：加载脚本 -> 逐音质解析样例歌 -> 记录耗时/结果。
     func testSource(_ key: String) async -> TestResult {
         guard let meta = sources.first(where: { $0.key == key }) else {
             return TestResult(key: key, name: key, ok: false, elapsed: 0,
                               platform: nil, message: "未找到音源")
         }
-        // 用一首大众歌曲做探针，各音源靠歌名/歌手匹配
         let sample: [String: Any] = [
             "id": "1295216600", "songId": "1295216600", "songid": "1295216600",
             "name": "晴天", "songname": "晴天",
@@ -225,28 +278,43 @@ final class LXSourceManager: ObservableObject {
         ]
         let start = Date()
         await engine.loadScript(meta.rawScript, key: key)
-        // 部分音源（如野花）异步 send(inited)，给一点时间让初始化完成
-        try? await Task.sleep(for: .milliseconds(600))
+        try? await Task.sleep(for: .milliseconds(300))
         let platformCount = engine.availableSources().count
-        var ok = false
-        var platform: String?
-        var message: String
-        if let result = try? await engine.resolve(musicInfo: sample, quality: "320k", timeout: 8) {
-            ok = true
-            platform = result.sourceName
-            message = "解析成功：\(result.url.host() ?? result.url.absoluteString)"
+
+        var qualityResults: [QualityResult] = []
+        var firstOK: LXResolvedURL?
+        // 逐音质测，每个最多 3 秒。
+        for q in Self.testQualities {
+            let qStart = Date()
+            if let result = try? await engine.resolve(musicInfo: sample, quality: q, timeout: 3) {
+                qualityResults.append(QualityResult(quality: q, ok: true,
+                                                     elapsed: Date().timeIntervalSince(qStart)))
+                if firstOK == nil { firstOK = result }
+            } else {
+                qualityResults.append(QualityResult(quality: q, ok: false,
+                                                     elapsed: Date().timeIntervalSince(qStart)))
+            }
+        }
+
+        let ok = firstOK != nil
+        let supported = qualityResults.filter(\.ok).map(\.quality).joined(separator: "/")
+        let message: String
+        if ok {
+            message = "支持音质：\(supported.isEmpty ? "？" : supported)"
+                + (firstOK?.url.host().map { " · \($0)" } ?? "")
         } else {
             let diag = engine.diagnostic()
             message = diag.isEmpty
-                ? "解析失败（上报平台 \(platformCount) 个，音源未返回有效地址）"
+                ? "全部音质解析失败（上报平台 \(platformCount) 个）"
                 : diag
         }
         return TestResult(key: key,
                           name: meta.name.isEmpty ? key : meta.name,
                           ok: ok,
                           elapsed: Date().timeIntervalSince(start),
-                          platform: platform,
-                          message: message)
+                          platform: firstOK?.sourceName,
+                          message: message,
+                          qualityResults: qualityResults)
     }
 
     ///  dlopen 后各音源 support 的 quality 名称可能不同，这里统一映射 kumone 音质到 LX 音质。
