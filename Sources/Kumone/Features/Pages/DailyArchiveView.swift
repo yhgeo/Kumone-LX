@@ -80,7 +80,7 @@ private struct ArchiveDayView: View {
                     Section("歌曲") {
                         ForEach(snapshot.tracks) { t in
                             HStack(spacing: 10) {
-                                if let pic = t.picURL, let url = URL(string: pic.resizedImageURL(120)) {
+                                if let pic = t.picURL, let url = pic.resizedImageURL(120) {
                                     CachedAsyncImage(url: url)
                                         .frame(width: 48, height: 48)
                                         .clipShape(RoundedRectangle(cornerRadius: 6))

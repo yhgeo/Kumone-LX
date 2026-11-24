@@ -96,23 +96,23 @@ final class LXSourceEngine {
         }
         let console = JSValue(newObjectIn: ctx)!
         for level in ["log", "warn", "error", "info"] {
-            console[level] = JSValue(object: logFn, in: ctx)
+            console.setObject(JSValue(object: logFn, in: ctx), forKeyedSubscript: level as NSString)
         }
-        ctx["console"] = console
+        ctx.setObject(console, forKeyedSubscript: "console" as NSString)
 
         // EVENT_NAMES
         let events = JSValue(newObjectIn: ctx)!
-        events["request"] = "request"
-        events["inited"] = "inited"
-        events["updateAlert"] = "updateAlert"
-        ctx["EVENT_NAMES"] = events
+        events.setObject("request", forKeyedSubscript: "request" as NSString)
+        events.setObject("inited", forKeyedSubscript: "inited" as NSString)
+        events.setObject("updateAlert", forKeyedSubscript: "updateAlert" as NSString)
+        ctx.setObject(events, forKeyedSubscript: "EVENT_NAMES" as NSString)
 
         // request(url, options, callback) -> URLSession
         let requestFn: @convention(block) (String, JSValue?, JSValue?) -> JSValue = { [weak self] urlString, optionsValue, callback in
             guard let self, let ctx = self.context else { return JSValue(undefinedIn: nil) }
             let abort = JSValue(newObjectIn: ctx)!
             var aborted = false
-            abort["abort"] = JSValue(object: { () in aborted = true }, in: ctx)
+            abort.setObject(JSValue(object: { () in aborted = true }, in: ctx), forKeyedSubscript: "abort" as NSString)
 
             guard let url = URL(string: urlString) else {
                 self.safeCall(callback, ["网络地址错误", NSNull()])
@@ -163,10 +163,10 @@ final class LXSourceEngine {
                 }
             }
             task.resume()
-            abort["abort"] = JSValue(object: { () in aborted = true; task.cancel() }, in: ctx)
+            abort.setObject(JSValue(object: { () in aborted = true; task.cancel() }, in: ctx), forKeyedSubscript: "abort" as NSString)
             return abort
         }
-        ctx["request"] = JSValue(object: requestFn, in: ctx)
+        ctx.setObject(JSValue(object: requestFn, in: ctx), forKeyedSubscript: "request" as NSString)
 
         // on(event, handler)
         let onFn: @convention(block) (String, JSValue?) -> JSValue = { [weak self] event, handler in
@@ -176,7 +176,7 @@ final class LXSourceEngine {
             }
             return JSValue(object: true, in: ctx)!
         }
-        ctx["on"] = JSValue(object: onFn, in: ctx)
+        ctx.setObject(JSValue(object: onFn, in: ctx), forKeyedSubscript: "on" as NSString)
 
         // send(event, data)
         let sendFn: @convention(block) (String, JSValue?) -> JSValue = { [weak self] event, data in
@@ -196,7 +196,7 @@ final class LXSourceEngine {
             }
             return JSValue(object: true, in: ctx)!
         }
-        ctx["send"] = JSValue(object: sendFn, in: ctx)
+        ctx.setObject(JSValue(object: sendFn, in: ctx), forKeyedSubscript: "send" as NSString)
 
         // setTimeout / clearTimeout
         let setTimerFn: @convention(block) (JSValue?, NSNumber?) -> NSNumber = { [weak self] fn, delay in
@@ -214,13 +214,13 @@ final class LXSourceEngine {
             self.queue.asyncAfter(deadline: .now() + ms, execute: work)
             return NSNumber(value: id)
         }
-        ctx["setTimeout"] = JSValue(object: setTimerFn, in: ctx)
+        ctx.setObject(JSValue(object: setTimerFn, in: ctx), forKeyedSubscript: "setTimeout" as NSString)
 
         let clearTimerFn: @convention(block) (NSNumber?) -> Void = { [weak self] num in
             guard let self, let num else { return }
             self.timers.removeValue(forKey: num.int32Value)?.cancel()
         }
-        ctx["clearTimeout"] = JSValue(object: clearTimerFn, in: ctx)
+        ctx.setObject(JSValue(object: clearTimerFn, in: ctx), forKeyedSubscript: "clearTimeout" as NSString)
 
         // atob / btoa
         let btoaFn: @convention(block) (String) -> String = { Data($0.utf8).base64EncodedString() }
@@ -228,8 +228,8 @@ final class LXSourceEngine {
             guard let d = Data(base64Encoded: $0) else { return "" }
             return String(data: d, encoding: .utf8) ?? ""
         }
-        ctx["btoa"] = JSValue(object: btoaFn, in: ctx)
-        ctx["atob"] = JSValue(object: atobFn, in: ctx)
+        ctx.setObject(JSValue(object: btoaFn, in: ctx), forKeyedSubscript: "btoa" as NSString)
+        ctx.setObject(JSValue(object: atobFn, in: ctx), forKeyedSubscript: "atob" as NSString)
     }
 
     /// 回调安全调用：统一切到 JS 队列执行。
@@ -312,7 +312,7 @@ final class LXSourceEngine {
                     cont.resume(returning: result)
                 }
 
-                let then = promise["then"]
+                let then = promise.objectForKeyedSubscript("then" as NSString)
                 if then?.isObject == true || then?.isCallable == true {
                     let onFulfilled: @convention(block) (JSValue?) -> Void = { [weak self] value in
                         guard let self else { return }
