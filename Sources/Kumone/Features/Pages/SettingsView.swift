@@ -140,6 +140,7 @@ struct SettingsView: View {
             }
 
             LXSourceSettingsSection()
+            DiagnosticsSettingsSection()
 
             Section("外观") {
                 Picker("主题", selection: $settings.appearance) {

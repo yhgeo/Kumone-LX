@@ -99,7 +99,7 @@ struct LXSourceSettingsSection: View {
         } header: {
             Text("LX 自定义音源")
         } footer: {
-            Text("脚本在本机运行，请只导入可信来源。来源：pdone/lx-music-source。")
+            Text("播放选源规则：网易云官方拿不到地址时，按下方启用顺序从上到下逐个尝试 LX 音源，第一个解析成功的生效；LX 全失败再用内置解锁源（酷狗/酷我）。测试✓的音源才可靠。每个音源最多 8 秒，避免卡住。")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }

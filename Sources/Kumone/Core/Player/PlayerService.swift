@@ -1065,6 +1065,8 @@ final class PlayerService: ObservableObject {
     /// state changes.
     private func resolveSource(for track: Track) async -> ResolvedSource? {
         let quality = SettingsManager.shared.audioQuality.rawValue
+        let diag = PlaybackDiagnostics.shared
+        diag.log("解析", "开始 id=\(track.id) 《\(track.name)》-\(track.artistNames) 音质=\(quality) 登录=\(AccountStore.shared.isLoggedIn) VIP=\(AccountStore.shared.vipType)")
         lastResolveFailure = nil
         guard !Task.isCancelled else { return nil }
 
@@ -1079,10 +1081,12 @@ final class PlayerService: ObservableObject {
             if data?.url == nil, quality != AudioQuality.standard.rawValue {
                 data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
             }
+            diag.log("官方", "id=\(track.id) code=\(data?.code.map(String.init) ?? "nil") url=\(data?.url.map { String($0.prefix(60)) } ?? "nil") 试听=\(data?.freeTrialInfo != nil)")
         } catch {
             if !(error is CancellationError) {
                 lastResolveFailure = error.localizedDescription
                 Self.resolveLog.error("官方播放地址失败 \(track.id): \(String(describing: error))")
+                diag.log("官方", "id=\(track.id) 失败: \(error.localizedDescription)")
             }
             data = nil
         }
@@ -1091,17 +1095,22 @@ final class PlayerService: ObservableObject {
         // 标记试听与触发音源兜底，不影响"有 URL 先播"——普通歌曾被误判跳过。
         if let urlString = data?.url {
             url = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
+            diag.log("官方", "id=\(track.id) 采用官方URL")
         }
 
         // 2) 官方没给 URL（风控/无版权/VIP）→ 自定义音源兜底。
         if url == nil {
             // 清掉官方的风控文案，让最终失败提示反映音源真实情况。
             lastResolveFailure = nil
+            diag.log("兜底", "id=\(track.id) 官方无URL，进入音源兜底")
             let lxQuality = LXSourceManager.lxQuality(for: quality)
             if let lx = await LXSourceManager.shared.resolve(track: track, quality: lxQuality) {
                 url = lx.url
                 unblock = "LX·\(lx.sourceName)"
                 data = nil
+                diag.log("兜底", "id=\(track.id) LX成功 platform=\(lx.sourceName) host=\(lx.url.host() ?? "?")")
+            } else {
+                diag.log("兜底", "id=\(track.id) LX全部失败")
             }
             // 3) LX 没成功再用内置解锁源（pyncmd / 酷狗 / 酷我）。
             if url == nil, SettingsManager.shared.enableUnblock {
@@ -1114,13 +1123,21 @@ final class PlayerService: ObservableObject {
                     url = unblocked.url
                     unblock = unblocked.displayName
                     data = nil
+                    diag.log("兜底", "id=\(track.id) 内置音源成功=\(unblocked.displayName)")
+                } else {
+                    diag.log("兜底", "id=\(track.id) 内置音源失败 enabled=\(SettingsManager.shared.enabledAudioSourceIDs.map(\.rawValue))")
                 }
             }
             if url == nil {
                 lastResolveFailure = String(localized: "所有音源均无法解析，请检查音源可用性或稍后重试")
+                diag.log("兜底", "id=\(track.id) 全部音源失败，将跳过")
             }
         }
-        guard !Task.isCancelled, let url else { return nil }
+        guard !Task.isCancelled, let url else {
+            diag.log("解析", "id=\(track.id) 返回nil（跳过）原因=\(lastResolveFailure ?? "取消")")
+            return nil
+        }
+        diag.log("解析", "id=\(track.id) 成功 host=\(url.host() ?? "?") source=\(unblock ?? "官方")")
         let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension.lowercased()
         return ResolvedSource(
             url: url,
@@ -1160,6 +1177,7 @@ final class PlayerService: ObservableObject {
             let reason = lastResolveFailure ?? track.playability(privilege: nil,
                                                                  isLoggedIn: AccountStore.shared.isLoggedIn,
                                                                  vipType: AccountStore.shared.vipType).reason
+            PlaybackDiagnostics.shared.log("播放", "跳过《\(track.name)》id=\(track.id) 原因=\(reason ?? "无") ")
             ToastCenter.shared.show(String(localized: "《\(track.name)》无法播放\(reason.map { "：\($0)" } ?? "")"))
             guard isPlaying else { return }
             if consecutiveFailures < 5 {
@@ -1389,6 +1407,7 @@ final class PlayerService: ObservableObject {
     private func streamFallbackFailed() {
         isBuffering = false
         consecutiveFailures += 1
+        PlaybackDiagnostics.shared.log("播放", "数据流失败，跳过《\(currentTrack?.name ?? "?")》id=\(currentTrack?.id ?? 0) source=\(unblockSource ?? "官方")")
         ToastCenter.shared.show(String(localized: "播放失败，已跳过"))
         if consecutiveFailures < 5 {
             advanceToNext(userInitiated: false)

@@ -114,11 +114,19 @@ final class DailyRecommendArchive {
         return f.string(from: date)
     }
 
-    /// 当天首次拉取成功时调用；同一天不覆盖。
+    /// 按网易云更新时间（每天 6:00）归档：6 点前拉到的是昨天的推荐，归到昨天。
+    static func archiveDateKey(for date: Date = Date()) -> String {
+        let cal = Calendar.current
+        let hour = cal.component(.hour, from: date)
+        let effective = hour < 6 ? (cal.date(byAdding: .day, value: -1, to: date) ?? date) : date
+        return key(for: effective)
+    }
+
+    /// 当天首次拉取成功时调用；同一归档日不覆盖。
     @discardableResult
     func saveToday(_ tracks: [Track]) async throws -> DailySnapshot? {
         guard !tracks.isEmpty else { return nil }
-        let key = Self.key(for: Date())
+        let key = Self.archiveDateKey()
         if fm.fileExists(atPath: fileURL(for: key).path) {
             return try? load(dateKey: key)
         }

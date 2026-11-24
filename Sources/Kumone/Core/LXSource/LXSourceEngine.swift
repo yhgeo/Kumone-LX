@@ -381,14 +381,18 @@ final class LXSourceEngine {
 
     /// 解析播放地址：遍历当前脚本上报的全部平台（kw/kg/tx/wy/mg...）逐一尝试，
     /// 返回第一个可用的 https 地址。
-    func resolve(musicInfo: [String: Any], quality: String = "128k") async throws -> LXResolvedURL {
+    func resolve(musicInfo: [String: Any], quality: String = "128k", timeout: TimeInterval = 20) async throws -> LXResolvedURL {
         let platforms = queue.sync { Array(capabilities.keys).sorted() }
         let hasFallback = queue.sync { requestHandlers[".__pending__"] != nil }
         guard !platforms.isEmpty || hasFallback else { throw LXSourceError.notInitialized }
 
+        let deadline = Date().addingTimeInterval(timeout)
         let candidates = platforms.isEmpty ? ["kw"] : platforms
         for platform in candidates {
-            if let result = await resolveOne(platform: platform, musicInfo: musicInfo, quality: quality) {
+            if Date() > deadline { break }
+            let perPlatform = deadline.timeIntervalSince(Date())
+            if let result = await resolveOne(platform: platform, musicInfo: musicInfo,
+                                             quality: quality, timeout: perPlatform) {
                 return result
             }
         }
@@ -396,7 +400,7 @@ final class LXSourceEngine {
     }
 
     /// 单平台解析。失败返回 nil，由调用方决定继续尝试下一个平台。
-    private func resolveOne(platform: String, musicInfo: [String: Any], quality: String) async -> LXResolvedURL? {
+    private func resolveOne(platform: String, musicInfo: [String: Any], quality: String, timeout: TimeInterval) async -> LXResolvedURL? {
         await withCheckedContinuation { (cont: CheckedContinuation<LXResolvedURL?, Never>) in
             queue.async {
                 guard let ctx = self.context,
@@ -443,7 +447,7 @@ final class LXSourceEngine {
                         JSValue(object: onFulfilled, in: ctx)!,
                         JSValue(object: onRejected, in: ctx)!,
                     ])
-                    self.queue.asyncAfter(deadline: .now() + 20) { finish(nil) }
+                    self.queue.asyncAfter(deadline: .now() + max(1, timeout)) { finish(nil) }
                 } else {
                     let text = promise.toString() ?? ""
                     if let url = URL(string: text), url.scheme?.hasPrefix("http") == true {

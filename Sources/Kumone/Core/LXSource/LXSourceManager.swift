@@ -175,15 +175,25 @@ final class LXSourceManager: ObservableObject {
     }
 
     /// 用已启用的音源依次尝试解析歌曲播放地址。返回第一个成功者。
+    /// 按启用顺序逐个尝试；每个音源最多 8 秒，避免单个慢音源拖垮播放。
     func resolve(track: Track, quality: String = "128k") async -> LXResolvedURL? {
-        for key in enabledKeys.sorted() {
+        let diag = PlaybackDiagnostics.shared
+        let keys = enabledKeys.sorted()
+        diag.log("音源", "播放解析启用音源 \(keys.count) 个: \(keys.joined(separator: ","))")
+        for key in keys {
             guard let meta = sources.first(where: { $0.key == key }) else { continue }
-            // 懒加载脚本到引擎（每次解析前 reload，避免脚本状态污染）
+            let start = Date()
             await engine.loadScript(meta.rawScript, key: key)
-            // 引擎会遍历该脚本上报的所有平台（kw/kg/tx/wy/mg...）
-            if let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality) {
-                log.info("LX resolved \(track.id) via \(key, privacy: .public) platform=\(result.sourceName, privacy: .public)")
+            // 异步 inited 的音源给一点初始化时间
+            try? await Task.sleep(for: .milliseconds(200))
+            // 每个音源整体 8 秒超时（引擎内部实现，避免 Swift 并发 Sendable 问题）
+            let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality, timeout: 8)
+            let elapsed = Date().timeIntervalSince(start)
+            if let result {
+                diag.log("音源", "✓ \(meta.name) key=\(key) platform=\(result.sourceName) 耗时\(String(format:"%.1f",elapsed))s host=\(result.url.host() ?? "?")")
                 return result
+            } else {
+                diag.log("音源", "✗ \(meta.name) key=\(key) 耗时\(String(format:"%.1f",elapsed))s 诊断=\(engine.diagnostic())")
             }
         }
         return nil
@@ -221,7 +231,7 @@ final class LXSourceManager: ObservableObject {
         var ok = false
         var platform: String?
         var message: String
-        if let result = try? await engine.resolve(musicInfo: sample, quality: "320k") {
+        if let result = try? await engine.resolve(musicInfo: sample, quality: "320k", timeout: 8) {
             ok = true
             platform = result.sourceName
             message = "解析成功：\(result.url.host() ?? result.url.absoluteString)"
@@ -242,10 +252,12 @@ final class LXSourceManager: ObservableObject {
     ///  dlopen 后各音源 support 的 quality 名称可能不同，这里统一映射 kumone 音质到 LX 音质。
     static func lxQuality(for audioQuality: String) -> String {
         switch audioQuality.lowercased() {
-        case "exhigh", "h", "high": return "320k"
-        case "lossless", "sq": return "flac"
         case "hires", "hr": return "flac24bit"
-        default: return "128k"
+        case "lossless", "sq": return "flac"
+        // 标准/较高/极高 一律用 320k：绝大多数 lx 音源只配了 320k/128k，
+        // 128k 在不少音源上不支持，导致"测试可用但播放跳过"。
+        case "standard", "higher", "high", "exhigh", "h", "128k": return "320k"
+        default: return "320k"
         }
     }
 }
