@@ -875,6 +875,7 @@ final class PlayerService: ObservableObject {
     // MARK: - Advancing
 
     private func advanceToNext(userInitiated: Bool) {
+        PlaybackDiagnostics.shared.log("播放", "advanceToNext user=\(userInitiated) 当前=\(currentTrack?.name ?? "nil")")
         if usesOfflineQueue, !nextCandidates().isEmpty {
             pendingAutoAdvance = !userInitiated
             advanceOffline()
@@ -3179,6 +3180,7 @@ final class PlayerService: ObservableObject {
     /// or a loudness trim, so hand-overs from it fall back to gapless.
     private func playLocalFile(_ url: URL, lease: OfflinePlaybackLease?, for track: Track, generation: Int,
                                from position: TimeInterval = 0) {
+        PlaybackDiagnostics.shared.log("播放", "本地播放《\(track.name)》id=\(track.id)")
         consecutiveFailures = 0
         servedQuality = lease?.descriptor.identity.quality
         currentCacheKey = nil
