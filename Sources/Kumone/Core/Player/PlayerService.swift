@@ -1067,50 +1067,81 @@ final class PlayerService: ObservableObject {
         let quality = SettingsManager.shared.audioQuality.rawValue
         lastResolveFailure = nil
         guard !Task.isCancelled else { return nil }
+
+        let account = AccountStore.shared
+        let playability = track.playability(privilege: nil,
+                                            isLoggedIn: account.isLoggedIn,
+                                            vipType: account.vipType)
+        // VIP/付费/无版权/下架歌曲直接走 LX 自定义音源，不请求官方接口。
+        // 官方接口对这些歌只会返回风控/试听提示（"检测到您的网络环境存在风险"），
+        // 既拿不到完整地址又会触发跳过。非 VIP 歌曲仍走官方资源，速度最快。
+        let needsCustomSource: Bool = {
+            switch playability {
+            case .vipOnly, .paidAlbum, .noCopyright, .delisted: return true
+            case .playable: return false
+            }
+        }()
+
         var data: SongURLData?
-        do {
-            data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first
-            guard !Task.isCancelled else { return nil }
-            if data?.url == nil, quality != AudioQuality.standard.rawValue {
-                data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
-            }
-        } catch {
-            // Kept for the 无法播放 toast: a request that failed is not the
-            // same as a song the service refuses, and saying which helps.
-            if !(error is CancellationError) {
-                lastResolveFailure = error.localizedDescription
-                Self.resolveLog.error("Playback URL for \(track.id) failed: \(String(describing: error))")
-            }
-        }
-        guard !Task.isCancelled else { return nil }
         var url: URL?
         var unblock: String?
-        if let urlString = data?.url {
-            url = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
-        }
-        // The service refused — try third-party sources (unblock-style).
-        // #104 made the source list configurable; resolve through the enabled
-        // sources (single-shot here, so nothing is excluded).
-        if url == nil || data?.freeTrialInfo != nil, SettingsManager.shared.enableUnblock {
-            let resolution = await UnblockService.resolve(
-                track,
-                enabledSources: SettingsManager.shared.enabledAudioSourceIDs,
-                excluding: []
-            )
-            if let unblocked = resolution.source {
-                url = unblocked.url
-                unblock = unblocked.displayName
-                data = nil
-            }
-        }
-        // LX 自定义音源（用户从 lx-music-source 导入的脚本）：
-        // 当官方与内置解锁源都拿不到地址时，用已启用的 LX 音源解析。
-        if url == nil {
+
+        if needsCustomSource {
+            // VIP 歌曲：直接用 LX 自定义音源（用户从 lx-music-source 导入）
             let lxQuality = LXSourceManager.lxQuality(for: quality)
             if let lx = await LXSourceManager.shared.resolve(track: track, quality: lxQuality) {
                 url = lx.url
                 unblock = "LX·\(lx.sourceName)"
-                data = nil
+            }
+            // LX 没有或失败，再退回内置解锁源
+            if url == nil, SettingsManager.shared.enableUnblock {
+                let resolution = await UnblockService.resolve(
+                    track,
+                    enabledSources: SettingsManager.shared.enabledAudioSourceIDs,
+                    excluding: []
+                )
+                if let unblocked = resolution.source {
+                    url = unblocked.url
+                    unblock = unblocked.displayName
+                }
+            }
+        } else {
+            // 非 VIP：正常走网易云官方资源
+            do {
+                data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first
+                guard !Task.isCancelled else { return nil }
+                if data?.url == nil, quality != AudioQuality.standard.rawValue {
+                    data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
+                }
+            } catch {
+                if !(error is CancellationError) {
+                    lastResolveFailure = error.localizedDescription
+                    Self.resolveLog.error("Playback URL for \(track.id) failed: \(String(describing: error))")
+                }
+            }
+            if let urlString = data?.url {
+                url = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
+            }
+            // 官方只给试听片段时，也用自定义音源拿完整版
+            if url == nil || data?.freeTrialInfo != nil {
+                let lxQuality = LXSourceManager.lxQuality(for: quality)
+                if let lx = await LXSourceManager.shared.resolve(track: track, quality: lxQuality) {
+                    url = lx.url
+                    unblock = "LX·\(lx.sourceName)"
+                    data = nil
+                }
+            }
+            if url == nil, SettingsManager.shared.enableUnblock {
+                let resolution = await UnblockService.resolve(
+                    track,
+                    enabledSources: SettingsManager.shared.enabledAudioSourceIDs,
+                    excluding: []
+                )
+                if let unblocked = resolution.source {
+                    url = unblocked.url
+                    unblock = unblocked.displayName
+                    data = nil
+                }
             }
         }
         guard !Task.isCancelled, let url else { return nil }

@@ -161,7 +161,8 @@ final class AccountStore: ObservableObject {
     /// for it; sync still withdraws this device's record after sign-out.
     func logout() async throws {
         let cookies = MusicClient.shared.authenticationCookies()
-        let revokeSession = SyncService.shared.shouldRevokeLoginSession(accountID: authenticatedAccountID)
+        // 定制版无 iCloud 同步，退出登录直接撤销服务端会话。
+        let revokeSession = true
         try MusicClient.shared.clearAuthCookies()
         bootstrapGeneration += 1
         AccountSnapshotStorage.shared.clear()

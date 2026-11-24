@@ -5,16 +5,14 @@ struct PlaybackLifecycle: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .task { await SyncService.shared.start() }
+            // 定制版不启用 iCloud 同步，不再启动 SyncService。
             #if os(macOS)
-            .onChange(of: scenePhase) { _, phase in
+            .onChange(of: scenePhase) { _, _ in
                 PlayerService.shared.checkpointPlayback()
-                Task { await SyncService.shared.setForeground(phase == .active) }
             }
             #else
-            .onChange(of: scenePhase) { phase in
+            .onChange(of: scenePhase) { _ in
                 PlayerService.shared.checkpointPlayback()
-                Task { await SyncService.shared.setForeground(phase == .active) }
             }
             #endif
     }
