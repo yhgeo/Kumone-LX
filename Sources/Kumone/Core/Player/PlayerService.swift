@@ -311,6 +311,8 @@ final class PlayerService: ObservableObject {
     private var lastResolveFailure: String?
     /// 官方 URL 拿到但音频加载失败（风控返回非音频）时，记录需要强制走音源的歌。
     private var forceSourceRetryIDs: Set<Int> = []
+    /// 已经强制重试过的歌，避免音源也失败时反复重试。
+    private var retriedSourceIDs: Set<Int> = []
     private static let resolveLog = Logger(subsystem: "sb.moe.kumone", category: "playback")
     private var scrobbled = false
     private var startScrobbled = false
@@ -1418,7 +1420,9 @@ final class PlayerService: ObservableObject {
     private func streamFallbackFailed() {
         isBuffering = false
         // 官方 URL 加载失败（风控假地址）：强制走音源重试一次，而不是直接跳过。
-        if let track = currentTrack, unblockSource == nil, !forceSourceRetryIDs.contains(track.id) {
+        if let track = currentTrack, unblockSource == nil,
+           !forceSourceRetryIDs.contains(track.id), !retriedSourceIDs.contains(track.id) {
+            retriedSourceIDs.insert(track.id)
             forceSourceRetryIDs.insert(track.id)
             consecutiveFailures = 0
             PlaybackDiagnostics.shared.log("播放", "官方URL加载失败，强制音源重试《\(track.name)》id=\(track.id)")
