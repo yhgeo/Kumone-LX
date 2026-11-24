@@ -309,6 +309,8 @@ final class PlayerService: ObservableObject {
     /// Why the last playback URL request failed, when it failed in transit
     /// or the service refused it, rather than answering with no URL.
     private var lastResolveFailure: String?
+    /// 官方 URL 拿到但音频加载失败（风控返回非音频）时，记录需要强制走音源的歌。
+    private var forceSourceRetryIDs: Set<Int> = []
     private static let resolveLog = Logger(subsystem: "sb.moe.kumone", category: "playback")
     private var scrobbled = false
     private var startScrobbled = false
@@ -1074,21 +1076,29 @@ final class PlayerService: ObservableObject {
         var url: URL?
         var unblock: String?
 
+        let forceSource = forceSourceRetryIDs.contains(track.id)
+        if forceSource { forceSourceRetryIDs.remove(track.id) }
+
         // 1) 先试网易云官方接口：普通歌最快，且音质最好。
-        do {
-            data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first
-            guard !Task.isCancelled else { return nil }
-            if data?.url == nil, quality != AudioQuality.standard.rawValue {
-                data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
+        //    强制音源重试时跳过官方（上次官方 URL 加载失败，可能是风控假 URL）。
+        if forceSource {
+            diag.log("解析", "id=\(track.id) 强制跳过官方，直接用音源（上次官方URL加载失败）")
+        } else {
+            do {
+                data = try await MusicAPI.songURLRetrying(ids: [track.id], level: quality).first
+                guard !Task.isCancelled else { return nil }
+                if data?.url == nil, quality != AudioQuality.standard.rawValue {
+                    data = try await MusicAPI.songURLRetrying(ids: [track.id], level: AudioQuality.standard.rawValue).first
+                }
+                diag.log("官方", "id=\(track.id) code=\(data?.code.map(String.init) ?? "nil") url=\(data?.url.map { String($0.prefix(60)) } ?? "nil") 试听=\(data?.freeTrialInfo != nil)")
+            } catch {
+                if !(error is CancellationError) {
+                    lastResolveFailure = error.localizedDescription
+                    Self.resolveLog.error("官方播放地址失败 \(track.id): \(String(describing: error))")
+                    diag.log("官方", "id=\(track.id) 失败: \(error.localizedDescription)")
+                }
+                data = nil
             }
-            diag.log("官方", "id=\(track.id) code=\(data?.code.map(String.init) ?? "nil") url=\(data?.url.map { String($0.prefix(60)) } ?? "nil") 试听=\(data?.freeTrialInfo != nil)")
-        } catch {
-            if !(error is CancellationError) {
-                lastResolveFailure = error.localizedDescription
-                Self.resolveLog.error("官方播放地址失败 \(track.id): \(String(describing: error))")
-                diag.log("官方", "id=\(track.id) 失败: \(error.localizedDescription)")
-            }
-            data = nil
         }
 
         // 官方给了 URL 就直接用（与 kumone 原版一致）。freeTrialInfo 只用于
@@ -1098,8 +1108,9 @@ final class PlayerService: ObservableObject {
             diag.log("官方", "id=\(track.id) 采用官方URL")
         }
 
-        // 2) 官方没给 URL（风控/无版权/VIP）→ 自定义音源兜底。
-        if url == nil {
+        // 2) 官方没给 URL（风控/无版权/VIP）或上次官方 URL 加载失败 → 自定义音源兜底。
+        if url == nil || forceSource {
+            if forceSource { url = nil; data = nil }
             // 清掉官方的风控文案，让最终失败提示反映音源真实情况。
             lastResolveFailure = nil
             diag.log("兜底", "id=\(track.id) 官方无URL，进入音源兜底")
@@ -1406,6 +1417,17 @@ final class PlayerService: ObservableObject {
 
     private func streamFallbackFailed() {
         isBuffering = false
+        // 官方 URL 加载失败（风控假地址）：强制走音源重试一次，而不是直接跳过。
+        if let track = currentTrack, unblockSource == nil, !forceSourceRetryIDs.contains(track.id) {
+            forceSourceRetryIDs.insert(track.id)
+            consecutiveFailures = 0
+            PlaybackDiagnostics.shared.log("播放", "官方URL加载失败，强制音源重试《\(track.name)》id=\(track.id)")
+            let generation = resolveGeneration
+            Task {
+                await self.resolveAndLoad(track, generation: generation)
+            }
+            return
+        }
         consecutiveFailures += 1
         PlaybackDiagnostics.shared.log("播放", "数据流失败，跳过《\(currentTrack?.name ?? "?")》id=\(currentTrack?.id ?? 0) source=\(unblockSource ?? "官方")")
         ToastCenter.shared.show(String(localized: "播放失败，已跳过"))
