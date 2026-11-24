@@ -104,3 +104,9 @@
 
 - **日志仍不记录播放的根治**：此前用 JSON 整文件反复重写，高并发下后写覆盖先写。改为**追加式文本日志**（每条 FileHandle append 到 playback-diagnostics.txt），不再丢条目；导出直接读内存+文本。
 - **全播放入口埋点**：play(tracks:)/playTrack/startPlaying/togglePlayPause/advanceToNext/playLocalFile/resolveAndLoad 全部记录，任何播放/切歌/恢复/跳过动作都必留痕。
+
+## 十次修复（2026-11-25 · 真正根因）
+
+- **此前多次播放修复全部无效的根源**：kumone 有两套 PlayerService，`PlayerService.swift` 是 `#if os(macOS)`，`PlayerServiceIOS.swift` 是 `#if os(iOS)`。之前所有"音源兜底/播放日志/强制重试"都加在 macOS 文件，iOS App 根本不编译它——所以 VIP/风控歌依旧跳过、日志一条没有。
+- 现已把完整链路移植到 iOS 文件：官方失败 → 缓存 → **LX 自定义音源**（用户导入的）→ 内置解锁源（酷狗/酷我/pyncmd）→ 失败跳过；play/startPlaying/toggle/advance/resolveAndLoad/handleUnplayable 全埋点；init 触发日志就绪。
+- 顺带修复 PlaybackDiagnostics.load() 的行首空格解析 bug（重启后历史日志不再丢失）。
