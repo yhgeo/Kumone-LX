@@ -215,18 +215,21 @@ final class LXSourceManager: ObservableObject {
         ]
         let start = Date()
         await engine.loadScript(meta.rawScript, key: key)
-        let loadOK = engine.availableSources()
+        // 部分音源（如野花）异步 send(inited)，给一点时间让初始化完成
+        try? await Task.sleep(for: .milliseconds(600))
+        let platformCount = engine.availableSources().count
         var ok = false
         var platform: String?
-        var message = engine.diagnostic()
-        if !loadOK.isEmpty {
-            if let result = try? await engine.resolve(musicInfo: sample, quality: "320k") {
-                ok = true
-                platform = result.sourceName
-                message = "解析成功：\(result.url.host() ?? result.url.absoluteString)"
-            } else {
-                message = engine.diagnostic().isEmpty ? "解析失败（音源未返回有效地址）" : engine.diagnostic()
-            }
+        var message: String
+        if let result = try? await engine.resolve(musicInfo: sample, quality: "320k") {
+            ok = true
+            platform = result.sourceName
+            message = "解析成功：\(result.url.host() ?? result.url.absoluteString)"
+        } else {
+            let diag = engine.diagnostic()
+            message = diag.isEmpty
+                ? "解析失败（上报平台 \(platformCount) 个，音源未返回有效地址）"
+                : diag
         }
         return TestResult(key: key,
                           name: meta.name.isEmpty ? key : meta.name,
