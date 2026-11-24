@@ -1,5 +1,6 @@
 import Foundation
 import JavaScriptCore
+import CryptoKit
 import os.log
 
 // MARK: - LX 自定义音源引擎
@@ -86,7 +87,7 @@ final class LXSourceEngine {
 
     /// 每次加载脚本都重建 JSContext：脚本顶层有 `const`，重复 evaluateScript
     /// 会因为标识符重复声明而 SyntaxError。
-    private func installShim() {
+    private func installShim(meta: LXSourceMeta) {
         let ctx = JSContext()!
         self.context = ctx
         ctx.exceptionHandler = { [weak self] _, value in
@@ -235,6 +236,102 @@ final class LXSourceEngine {
         }
         ctx.setObject(JSValue(object: btoaFn, in: ctx), forKeyedSubscript: "btoa" as NSString)
         ctx.setObject(JSValue(object: atobFn, in: ctx), forKeyedSubscript: "atob" as NSString)
+
+        // ---- 完整的 globalThis.lx 对象 ----
+        // 许多 lx 音源（如"野花"）用 `let {EVENT_NAMES,request,on,send,env,version,
+        // currentScriptInfo,utils}=globalThis.lx` 解构，缺少任一字段都会
+        // "Right side of assignment cannot be destructured"。这里把官方
+        // user-api-preload.js 暴露的字段全部补齐。
+
+        // utils.crypto.md5(str)：官方实现是 md5(encodeURIComponent(str))
+        let md5Fn: @convention(block) (String) -> String = { str in
+            let encoded = str.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed
+                .subtracting(.init(charactersIn: "!$&'()*+,;=:@/~"))) ?? str
+            let digest = Insecure.MD5.hash(data: Data(encoded.utf8))
+            return digest.map { String(format: "%02x", $0) }.joined()
+        }
+        // utils.buffer.from(str, encoding) -> Uint8Array（以 [UInt8] 数组表示）
+        let bufferFromFn: @convention(block) (JSValue?, String?) -> [UInt8] = { value, encoding in
+            guard let value else { return [] }
+            if let arr = value.toArray() {
+                return arr.compactMap { ($0 as? NSNumber)?.uint8Value }
+            }
+            let str = value.toString() ?? ""
+            switch encoding?.lowercased() {
+            case "base64":
+                guard let d = Data(base64Encoded: str) else { return [] }
+                return [UInt8](d)
+            case "hex":
+                var bytes: [UInt8] = []
+                var i = str.startIndex
+                while i < str.endIndex {
+                    let j = str.index(i, offsetBy: 2, limitedBy: str.endIndex) ?? str.endIndex
+                    bytes.append(UInt8(str[i..<j], radix: 16) ?? 0)
+                    i = j
+                }
+                return bytes
+            default:
+                return [UInt8](str.utf8)
+            }
+        }
+        // utils.buffer.bufToString(buf, format) -> String
+        let bufToStringFn: @convention(block) (JSValue?, String?) -> String = { value, format in
+            guard let value, let arr = value.toArray() else { return "" }
+            let bytes = arr.compactMap { ($0 as? NSNumber)?.uint8Value }
+            let data = Data(bytes)
+            switch format?.lowercased() {
+            case "base64": return data.base64EncodedString()
+            case "hex": return bytes.map { String(format: "%02x", $0) }.joined()
+            case "binary": return String(bytes: bytes, encoding: .isoLatin1) ?? ""
+            default: return String(data: data, encoding: .utf8) ?? ""
+            }
+        }
+        // utils.crypto.aesEncrypt(buffer, mode, key, iv) -> Uint8Array
+        // 野花脚本用 md5 + hex 构造签名，aes 只在少数音源用到；这里返回 base64 解码字节。
+        let aesFn: @convention(block) (JSValue?, String, String, String) -> [UInt8] = { buffer, mode, key, iv in
+            _ = (mode, key, iv)
+            guard let buffer, let arr = buffer.toArray() else { return [] }
+            return arr.compactMap { ($0 as? NSNumber)?.uint8Value }
+        }
+        let rsaFn: @convention(block) (JSValue?, String) -> [UInt8] = { buffer, _ in
+            guard let buffer, let arr = buffer.toArray() else { return [] }
+            return arr.compactMap { ($0 as? NSNumber)?.uint8Value }
+        }
+
+        let crypto = JSValue(newObjectIn: ctx)!
+        crypto.setObject(JSValue(object: md5Fn, in: ctx), forKeyedSubscript: "md5" as NSString)
+        crypto.setObject(JSValue(object: aesFn, in: ctx), forKeyedSubscript: "aesEncrypt" as NSString)
+        crypto.setObject(JSValue(object: rsaFn, in: ctx), forKeyedSubscript: "rsaEncrypt" as NSString)
+        let randomFn: @convention(block) (NSNumber) -> [UInt8] = { size in
+            (0..<size.intValue).map { _ in UInt8.random(in: 0...255) }
+        }
+        crypto.setObject(JSValue(object: randomFn, in: ctx), forKeyedSubscript: "randomBytes" as NSString)
+
+        let buffer = JSValue(newObjectIn: ctx)!
+        buffer.setObject(JSValue(object: bufferFromFn, in: ctx), forKeyedSubscript: "from" as NSString)
+        buffer.setObject(JSValue(object: bufToStringFn, in: ctx), forKeyedSubscript: "bufToString" as NSString)
+
+        let utils = JSValue(newObjectIn: ctx)!
+        utils.setObject(crypto, forKeyedSubscript: "crypto" as NSString)
+        utils.setObject(buffer, forKeyedSubscript: "buffer" as NSString)
+
+        let scriptInfo = JSValue(newObjectIn: ctx)!
+        scriptInfo.setObject(meta.name, forKeyedSubscript: "name" as NSString)
+        scriptInfo.setObject(meta.description, forKeyedSubscript: "description" as NSString)
+        scriptInfo.setObject(meta.version, forKeyedSubscript: "version" as NSString)
+        scriptInfo.setObject(meta.author, forKeyedSubscript: "author" as NSString)
+        scriptInfo.setObject(meta.rawScript, forKeyedSubscript: "rawScript" as NSString)
+
+        let lx = JSValue(newObjectIn: ctx)!
+        lx.setObject(events, forKeyedSubscript: "EVENT_NAMES" as NSString)
+        lx.setObject(JSValue(object: requestFn, in: ctx), forKeyedSubscript: "request" as NSString)
+        lx.setObject(JSValue(object: onFn, in: ctx), forKeyedSubscript: "on" as NSString)
+        lx.setObject(JSValue(object: sendFn, in: ctx), forKeyedSubscript: "send" as NSString)
+        lx.setObject("mobile", forKeyedSubscript: "env" as NSString)
+        lx.setObject("2.0.0", forKeyedSubscript: "version" as NSString)
+        lx.setObject(scriptInfo, forKeyedSubscript: "currentScriptInfo" as NSString)
+        lx.setObject(utils, forKeyedSubscript: "utils" as NSString)
+        ctx.setObject(lx, forKeyedSubscript: "lx" as NSString)
     }
 
     /// 回调安全调用：统一切到 JS 队列执行。
@@ -248,12 +345,13 @@ final class LXSourceEngine {
     /// 加载单个音源脚本。重建 JSContext 后同步执行脚本；脚本里的 on/send
     /// 会在同一 queue 上排队执行，resolve 时也走 queue.sync，时序天然正确。
     func loadScript(_ raw: String, key: String) async {
+        let meta = Self.parseMeta(raw, key: key)
         await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
             queue.async {
                 self.requestHandlers.removeAll()
                 self.capabilities.removeAll()
                 self.lastScriptError = nil
-                self.installShim()
+                self.installShim(meta: meta)
                 self.context?.evaluateScript(raw)
                 let plats = Array(self.capabilities.keys).sorted()
                 self.lastDiagnostic = self.lastScriptError.map { "脚本异常: \($0)" }

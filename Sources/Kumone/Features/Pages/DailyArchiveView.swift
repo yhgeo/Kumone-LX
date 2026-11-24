@@ -61,11 +61,21 @@ struct DailyArchiveView: View {
 private struct ArchiveDayView: View {
     let dateKey: String
     @State private var snapshot: DailySnapshot?
+    @State private var loadError: String?
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Group {
-            if let snapshot {
+            if let loadError {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle").font(.system(size: 36))
+                        .foregroundStyle(.orange)
+                    Text("存档读取失败").font(.headline)
+                    Text(loadError).font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center).padding(.horizontal)
+                    Button("重试") { load() }
+                }
+            } else if let snapshot {
                 List {
                     Section {
                         Text("存档于 \(snapshot.savedAt.formatted(.dateTime.year().month().day().hour().minute()))")
@@ -109,12 +119,19 @@ private struct ArchiveDayView: View {
                     }
                 }
             } else {
-                ProgressView().onAppear {
-                    snapshot = try? DailyRecommendArchive.shared.load(dateKey: dateKey)
-                }
+                ProgressView("加载中…").onAppear { load() }
             }
         }
         .navigationTitle(dateKey)
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func load() {
+        loadError = nil
+        do {
+            snapshot = try DailyRecommendArchive.shared.load(dateKey: dateKey)
+        } catch {
+            loadError = "\(error.localizedDescription)。可尝试更新到新版后重新打开「每日推荐」生成新存档。"
+        }
     }
 }

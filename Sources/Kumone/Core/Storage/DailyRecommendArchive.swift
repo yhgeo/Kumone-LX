@@ -9,12 +9,60 @@ import os.log
 //   - 同一天重复拉取不覆盖（保留当天第一次快照）
 //   - 支持列出所有日期、读取某天、删除某天、清理过期
 
+/// 旧版存档的精简歌曲结构（2026-11-24 之前的格式），用于兼容解码。
+private struct LegacyArchivedTrack: Codable {
+    let songID: Int
+    let name: String
+    let artists: String
+    let album: String
+    let picURL: String?
+    let durationMS: Int
+}
+
 struct DailySnapshot: Codable, Hashable, Identifiable {
     var id: String { dateKey }
     let dateKey: String          // yyyy-MM-dd
     let savedAt: Date
     /// 存完整 Track，历史页可直接重建播放上下文。
     let tracks: [Track]
+
+    private enum CodingKeys: String, CodingKey {
+        case dateKey, savedAt, tracks
+    }
+
+    init(dateKey: String, savedAt: Date, tracks: [Track]) {
+        self.dateKey = dateKey
+        self.savedAt = savedAt
+        self.tracks = tracks
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        dateKey = try c.decode(String.self, forKey: .dateKey)
+        savedAt = try c.decode(Date.self, forKey: .savedAt)
+        // 新格式：完整 Track 数组
+        if let full = try? c.decode([Track].self, forKey: .tracks) {
+            tracks = full
+            return
+        }
+        // 旧格式：精简结构，重建为可播放的 Track
+        let legacy = try c.decode([LegacyArchivedTrack].self, forKey: .tracks)
+        // 用 JSON 重建以带上 album/picUrl/duration（Track 只有 decode 初始化器）
+        tracks = legacy.compactMap { t in
+            let artistNames = t.artists.split(separator: "/").map(String.init)
+            let json: [String: Any] = [
+                "id": t.songID,
+                "name": t.name,
+                "ar": artistNames.map { ["id": 0, "name": $0] },
+                "al": ["id": 0, "name": t.album, "picUrl": t.picURL ?? NSNull()],
+                "dt": t.durationMS,
+            ]
+            guard let data = try? JSONSerialization.data(withJSONObject: json),
+                  let track = try? JSONDecoder().decode(Track.self, from: data)
+            else { return nil }
+            return track
+        }
+    }
 }
 
 enum DailyRecommendArchiveError: LocalizedError {

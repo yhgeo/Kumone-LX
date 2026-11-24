@@ -15,6 +15,9 @@ struct LXSourceSettingsSection: View {
     @State private var testResults: [LXSourceManager.TestResult] = []
     @State private var showTestResult = false
     @State private var isTestingAll = false
+    @State private var isImportingAll = false
+    @State private var importAllResult: String?
+    @State private var showImportAllResult = false
 
     var body: some View {
         Section {
@@ -70,9 +73,20 @@ struct LXSourceSettingsSection: View {
             }
 
             Button {
+                Task { await importAll() }
+            } label: {
+                if isImportingAll {
+                    ProgressView("正在从 GitHub 批量导入…")
+                } else {
+                    Label("一键导入全部音源", systemImage: "square.stack.3d.down.forward")
+                }
+            }
+            .disabled(isImportingAll)
+
+            Button {
                 showImport = true
             } label: {
-                Label("导入音源脚本", systemImage: "plus.circle")
+                Label("手动导入单个音源", systemImage: "plus.circle")
             }
 
             if let err = manager.lastError, !err.isEmpty {
@@ -94,6 +108,41 @@ struct LXSourceSettingsSection: View {
         }
         .sheet(isPresented: $showTestResult) {
             testResultSheet
+        }
+        .sheet(isPresented: $showImportAllResult) {
+            importAllResultSheet
+        }
+    }
+
+    private var importAllResultSheet: some View {
+        NavigationStack {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(importAllResult ?? "")
+                    .font(.system(size: 14))
+                Text("已导入的音源可逐个点波形图标测试可用性；不可用的可左滑删除。")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(20)
+            .navigationTitle("批量导入结果")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") { showImportAllResult = false }
+                }
+            }
+        }
+    }
+
+    private func importAll() async {
+        await MainActor.run { isImportingAll = true }
+        let result = await manager.importAllFromGitHub()
+        let text = "成功导入 \(result.ok) / \(result.total) 个音源"
+            + (result.failures.isEmpty ? "" : "\n失败：\n" + result.failures.prefix(10).joined(separator: "\n"))
+        await MainActor.run {
+            isImportingAll = false
+            importAllResult = text
+            showImportAllResult = true
         }
     }
 

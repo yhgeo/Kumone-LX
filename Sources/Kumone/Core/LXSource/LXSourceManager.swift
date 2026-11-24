@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import os.log
 
 // MARK: - LX 自定义音源管理器
@@ -35,7 +36,26 @@ final class LXSourceManager: ObservableObject {
 
     private var validKey: CharacterSet { CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "_-")) }
 
-    /// 从脚本原文导入一个音源。key 由 @name 或传入键名生成，只保留安全字符。
+    /// 生成唯一 key：优先用音源目录名（调用方传 providedKey，如 "flower"），
+    /// 否则用 @name，再否则用脚本内容哈希。同名时追加序号，绝不覆盖已有音源。
+    private func uniqueKey(_ provided: String?, raw: String, meta: LXSourceMeta) -> String {
+        var base = (provided ?? meta.name)
+            .unicodeScalars.filter { validKey.contains($0) }
+            .map { String($0) }.joined()
+        if base.isEmpty {
+            let digest = Insecure.SHA1.hash(data: Data(raw.utf8)).map { String(format: "%02x", $0) }.joined()
+            base = "src" + String(digest.prefix(10))
+        }
+        var key = base
+        var n = 2
+        while sources.contains(where: { $0.key == key }) || fm.fileExists(atPath: fileURL(for: key).path) {
+            key = "\(base)-\(n)"
+            n += 1
+        }
+        return key
+    }
+
+    /// 从脚本原文导入一个音源。key 唯一，绝不覆盖已有音源。
     @discardableResult
     func importScript(_ raw: String, key providedKey: String? = nil) async -> LXSourceMeta? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -43,17 +63,17 @@ final class LXSourceManager: ObservableObject {
             await MainActor.run { lastError = "脚本内容为空" }
             return nil
         }
-        // 先让引擎解析元信息（解析 @name/@version），同时完成脚本初始化
-        let baseKey = (providedKey ?? "source")
-            .unicodeScalars.filter { validKey.contains($0) }
-            .map { String($0) }.joined()
-        let key = baseKey.isEmpty ? "source" : baseKey
+        let meta0 = LXSourceEngine.parseMeta(trimmed, key: "tmp")
+        let key = uniqueKey(providedKey, raw: trimmed, meta: meta0)
         await engine.loadScript(trimmed, key: key)
         let meta = LXSourceEngine.parseMeta(trimmed, key: key)
         try? trimmed.write(to: fileURL(for: key), atomically: true, encoding: .utf8)
         await MainActor.run {
-            sources.removeAll { $0.key == key }
-            sources.append(meta)
+            if let idx = sources.firstIndex(where: { $0.key == key }) {
+                sources[idx] = meta
+            } else {
+                sources.append(meta)
+            }
             sources.sort { $0.key < $1.key }
             enabledKeys.insert(key)
             persistEnabled()
@@ -61,6 +81,58 @@ final class LXSourceManager: ObservableObject {
         }
         log.info("imported LX source \(key, privacy: .public) name=\(meta.name, privacy: .public)")
         return meta
+    }
+
+    /// 批量从 pdone/lx-music-source 导入全部音源。返回成功导入的数量。
+    @discardableResult
+    func importBatch(_ items: [(key: String, raw: String)]) async -> Int {
+        var count = 0
+        for item in items where !item.raw.trimmingCharacters(in: .whitespaces).isEmpty {
+            if await importScript(item.raw, key: item.key) != nil { count += 1 }
+        }
+        return count
+    }
+
+    /// 一键导入：从 GitHub API 列出 pdone/lx-music-source 的所有音源目录，
+    /// 逐个下载 latest.js 并导入。返回 (成功数, 总数, 失败原因列表)。
+    func importAllFromGitHub() async -> (ok: Int, total: Int, failures: [String]) {
+        let api = "https://api.github.com/repos/pdone/lx-music-source/contents"
+        var request = URLRequest(url: URL(string: api)!)
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.timeoutInterval = 20
+        let dirs: [[String: Any]]
+        do {
+            let (data, _) = try await URLSession.shared.data(for: request)
+            guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
+                return (0, 0, ["仓库目录解析失败"])
+            }
+            dirs = arr.filter { ($0["type"] as? String) == "dir" }
+        } catch {
+            return (0, 0, ["获取音源列表失败：\(error.localizedDescription)"])
+        }
+
+        var items: [(key: String, raw: String)] = []
+        var failures: [String] = []
+        for dir in dirs {
+            guard let name = dir["name"] as? String else { continue }
+            // 目录项的 download_url 为 null，需拼 latest.js 的 raw 地址
+            let jsURL = "https://raw.githubusercontent.com/pdone/lx-music-source/main/\(name)/latest.js"
+            guard let url = URL(string: jsURL) else { continue }
+            do {
+                let (data, resp) = try await URLSession.shared.data(from: url)
+                if let http = resp as? HTTPURLResponse, http.statusCode != 200 {
+                    failures.append("\(name): HTTP \(http.statusCode)")
+                    continue
+                }
+                let raw = String(data: data, encoding: .utf8) ?? ""
+                if raw.isEmpty { failures.append("\(name): 空内容"); continue }
+                items.append((key: name, raw: raw))
+            } catch {
+                failures.append("\(name): \(error.localizedDescription)")
+            }
+        }
+        let ok = await importBatch(items)
+        return (ok, items.count, failures)
     }
 
     func removeSource(_ key: String) {

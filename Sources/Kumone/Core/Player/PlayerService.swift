@@ -1081,20 +1081,21 @@ final class PlayerService: ObservableObject {
             }
         } catch {
             if !(error is CancellationError) {
+                lastResolveFailure = error.localizedDescription
                 Self.resolveLog.error("官方播放地址失败 \(track.id): \(String(describing: error))")
             }
             data = nil
         }
 
-        // 官方返回完整地址（非试听）才直接用。试听片段 URL 不能用。
-        if let urlString = data?.url, data?.freeTrialInfo == nil {
+        // 官方给了 URL 就直接用（与 kumone 原版一致）。freeTrialInfo 只用于
+        // 标记试听与触发音源兜底，不影响"有 URL 先播"——普通歌曾被误判跳过。
+        if let urlString = data?.url {
             url = URL(string: urlString.replacingOccurrences(of: "http://", with: "https://"))
         }
 
-        // 2) 官方没给完整地址（风控/无版权/试听/VIP）→ 自定义音源兜底。
-        //    风控是账号/IP 级的，与 VIP 无关，所以这里按结果判断而非按歌曲类型预判。
+        // 2) 官方没给 URL（风控/无版权/VIP）→ 自定义音源兜底。
         if url == nil {
-            // 清掉官方的风控文案，避免音源也失败时误显示"检测到网络环境风险"。
+            // 清掉官方的风控文案，让最终失败提示反映音源真实情况。
             lastResolveFailure = nil
             let lxQuality = LXSourceManager.lxQuality(for: quality)
             if let lx = await LXSourceManager.shared.resolve(track: track, quality: lxQuality) {
