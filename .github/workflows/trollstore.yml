@@ -3,7 +3,18 @@ name: Build TrollStore IPA
 on:
   push:
     branches: [main]
+    # 只有代码/工程改动才构建；文档、日志说明等改动不触发。
+    paths:
+      - "Sources/**"
+      - "ios/**"
+      - "Package.swift"
+      - "Package.resolved"
   workflow_dispatch:
+
+# 同一分支反复提交时，取消仍在排队的旧构建，避免堆积多次。
+concurrency:
+  group: trollstore-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: write
