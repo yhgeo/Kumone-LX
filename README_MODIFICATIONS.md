@@ -110,3 +110,9 @@
 - **此前多次播放修复全部无效的根源**：kumone 有两套 PlayerService，`PlayerService.swift` 是 `#if os(macOS)`，`PlayerServiceIOS.swift` 是 `#if os(iOS)`。之前所有"音源兜底/播放日志/强制重试"都加在 macOS 文件，iOS App 根本不编译它——所以 VIP/风控歌依旧跳过、日志一条没有。
 - 现已把完整链路移植到 iOS 文件：官方失败 → 缓存 → **LX 自定义音源**（用户导入的）→ 内置解锁源（酷狗/酷我/pyncmd）→ 失败跳过；play/startPlaying/toggle/advance/resolveAndLoad/handleUnplayable 全埋点；init 触发日志就绪。
 - 顺带修复 PlaybackDiagnostics.load() 的行首空格解析 bug（重启后历史日志不再丢失）。
+
+## 十一次修复（2026-11-25）
+
+- **假 URL 根治**：日志显示幻音音源 0.2s"成功"但每首都同一无效 host，AVPlayer 加载失败就跳过。现在 LX resolve 与测试都会对返回的 URL 发 Range 请求验证（状态码 200~206、非 text/html/json、有实体），假 URL 自动淘汰换下一个音源。
+- **音质对齐**：音源测试五档改为官方的 标准/较高/极高/无损/Hi-Res，显示中文名；映射 标准→128k、较高/极高→320k、无损→flac、Hi-Res→flac24bit。
+- **官方风控修复**：eapi 头此前自相矛盾（UA=iPhone 但 osver=Windows、os=pc），易被判伪造。统一为 iOS 客户端头（os=ios、osver=16.6.1、appver=9.1.90）。设置→系统→接口可切换 pc/ios 对照测试。
