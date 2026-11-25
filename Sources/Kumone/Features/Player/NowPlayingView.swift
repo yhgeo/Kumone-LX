@@ -2134,59 +2134,17 @@ private struct CompactQueueContent: View {
                 }
             }
 
-            // 已播放：当前歌曲之前的曲目，可点击回跳
-            if !player.playedTracks.isEmpty {
-                HStack(alignment: .firstTextBaseline) {
-                    Text("已播放")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(.white)
-                    Spacer()
-                    Text("\(player.playedTracks.count) 首")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.white.opacity(0.46))
-                }
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 4) {
-                        ForEach(player.playedTracks) { track in
-                            Button { player.playQueuedTrack(track) } label: {
-                                HStack(spacing: 11) {
-                                    CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(120), animated: false)
-                                        .frame(width: 40, height: 40)
-                                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(track.name)
-                                            .font(.subheadline.weight(.semibold))
-                                            .foregroundStyle(.white.opacity(0.72))
-                                            .lineLimit(1)
-                                        Text(track.artistNames)
-                                            .font(.caption)
-                                            .foregroundStyle(.white.opacity(0.38))
-                                            .lineLimit(1)
-                                    }
-                                    Spacer()
-                                    Image(systemName: "backward.fill")
-                                        .font(.caption)
-                                        .foregroundStyle(.white.opacity(0.35))
-                                }
-                            }
-                            .buttonStyle(.plain)
-                        }
-                    }
-                }
-                .frame(maxHeight: 180)
-            }
-
             HStack(alignment: .firstTextBaseline) {
-                Text("继续播放")
+                Text("播放列表")
                     .font(.title3.weight(.bold))
                     .foregroundStyle(.white)
                 Spacer()
-                Text("\(player.upcomingTracks.count) 首")
+                Text("\(player.playedTracks.count + player.upcomingTracks.count) 首")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.46))
             }
 
-            if player.upcomingTracks.isEmpty {
+            if player.upcomingTracks.isEmpty && player.playedTracks.isEmpty {
                 VStack(spacing: 8) {
                     PlaybackHandoffList()
                     Image(systemName: "list.bullet")
@@ -2201,6 +2159,10 @@ private struct CompactQueueContent: View {
                     LazyVStack(spacing: 4) {
                         PlaybackHandoffList()
                             .padding(.bottom, 4)
+                        // 已播放曲目与待播放用同一行样式，灰化显示，点击可回跳
+                        ForEach(player.playedTracks) { track in
+                            CompactQueueRow(track: track, upcomingIndex: 0, isPlayed: true)
+                        }
                         ForEach(
                             Array(player.upcomingTracks.prefix(100).enumerated()),
                             id: \.offset
@@ -2253,12 +2215,18 @@ private struct CompactQueueContent: View {
 private struct CompactQueueRow: View {
     let track: Track
     let upcomingIndex: Int
+    /// 已播放的曲目：点击直接切回，样式灰化。
+    var isPlayed = false
 
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Button {
-            player.jumpToUpcoming(at: upcomingIndex, matching: track.id)
+            if isPlayed {
+                player.playQueuedTrack(track)
+            } else {
+                player.jumpToUpcoming(at: upcomingIndex, matching: track.id)
+            }
         } label: {
             HStack(spacing: 11) {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(120), animated: false)
@@ -2268,11 +2236,11 @@ private struct CompactQueueRow: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(track.name)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(0.9))
+                        .foregroundStyle(.white.opacity(isPlayed ? 0.5 : 0.9))
                         .lineLimit(1)
                     Text(track.artistNames)
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(0.48))
+                        .foregroundStyle(.white.opacity(isPlayed ? 0.3 : 0.48))
                         .lineLimit(1)
                 }
 

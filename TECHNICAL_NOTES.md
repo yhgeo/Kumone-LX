@@ -52,6 +52,14 @@ play(tracks:) / togglePlayPause / advanceToNext
 - 脚本顶层常写 `let {EVENT_NAMES,request,on,send,...}=globalThis.lx` 解构，**任一字段缺失都会报 "Right side of assignment cannot be destructured"**。
 - `request(url, opts, cb)` 由 Swift `URLSession` 实现，自动跟随系统代理/VPN。脚本报 "[local] 不支持" 是其自身环境检测，非代理问题。
 
+**调用约定已对照 LX 官方源码验证**（`lyswhut/lx-music-desktop` 的 `src/main/modules/userApi/renderer/preload.js`）：
+
+- 官方 `events.request.call(context, { source, action, info })`，其中 `info = { type, musicInfo }`——与本引擎 `resolveOne` 一致。
+- `send('inited', { sources: { kw: {type:'music',actions, qualitys}, ... } })` 上报平台能力——与 `capabilities` 记录一致。
+- `musicUrl` 返回必须是字符串 URL（长度 <2048、以 http 开头）——与引擎 `onFulfilled` 校验一致。
+
+**本地音源测试方法**（`../lx-source-test/faithful.js`）：在 node 里忠实复刻上述宿主，`musicInfo` 用纯数字 id（`1295216600`），遍历 `inited` 上报的所有平台逐个跑。结论：调用约定正确；部分音源 CDN（sayqz.com/haitangw.net 等）在测试机网络下 DNS 不通，属网络环境问题，不是代码缺陷。
+
 导入 key：按音源 `@name` 生成唯一键，重名加 `-2/-3`；早期用 URL 末段 `latest.js` 导致全部音源互相覆盖。
 
 ## 4. 假 URL 问题与验证
@@ -60,12 +68,18 @@ play(tracks:) / togglePlayPause / advanceToNext
 
 **根因**：音源脚本返回无效地址（反爬页/错误页/网页），而测试只判断 URL 是不是 http 开头 → 假阳性。第一个假阳性音源会一直占位，挡住后面真正能用的音源。
 
-**修复**：`LXSourceManager.verifyAudioURL(_:)` 发 `Range: bytes=0-2047` 请求，检查：
-- HTTP 状态码 200~206；
-- Content-Type 非 `text/html` / `json` / `text/plain`；
-- 返回实体非空。
+**修复**：`LXSourceManager.verifyAudioURL(_:)` 发 `Range: bytes=0-2047` 请求，检查 HTTP 状态码 200~206、Content-Type 非网页、实体非空。
 
-`resolve()`（播放）与 `testSource()`（测试）都先验证再采用，假 URL 自动淘汰换下一个音源。
+**二次修正（重要）**：初版验证见 JSON 就判失败，误杀了一大批**正规 API 端点型音源**——例如幻音返回 `music-dl.sayqz.com/api/?...&type=url`，请求它得到 JSON，需解析出真实音频 URL。现验证逻辑：
+
+- 跟随 302 重定向（`response.url` 即最终地址）；
+- Content-Type 为 json/javascript 时，从 `url/data/musicUrl/link/playUrl` 字段（含嵌套 `data.url`）提取真实地址，递归验证（最多 2 层）；
+- 返回「最终可播 URL」而非 Bool，播放时用它替换音源原始返回值（`LXResolvedURL(url: finalURL, ...)`）；
+- 只有 text/html、text/plain、无实体才判失败。
+
+这是"可用音源变少"的主因修正。经 node 本地测试（faithful.js）验证：溯音音源返回真实 `kw-lv.kuwo.cn` 直链、验证通过；幻音等 CDN 在测试机 DNS 不通，属网络侧限制。
+
+`resolve()`（播放）与 `testSource()`（测试）共用此验证，假 URL 淘汰换下一个音源，并配合失败冷却黑名单（5 分钟）避免重复试错。
 
 **音质映射**（与官方五档对齐）：标准→128k、较高/极高→320k、无损→flac、Hi-Res→flac24bit。
 
@@ -79,6 +93,16 @@ play(tracks:) / togglePlayPause / advanceToNext
 这种伪造客户端指纹易被风控判定。修复为统一 iOS 头：`os=ios`、`osver=16.6.1`、`appver=9.1.90`、`mobilename=iPhone`、`resolution=1179x2556`，并提供 pc/ios 切换开关对照测试。修复后日志中官方接口从全量 -460 恢复为 `code=200`。
 
 若两种头都风控，则是账号/IP 级问题，需依赖 LX 自定义音源。
+
+## 5b. 下载链路与 CDN header
+
+官方下载失败（VIP/风控/无版权）时 `DownloadManager` 的 resolver 回退 `MusicAPI.lxDownloadResource`：从 LX 音源解析 URL → HEAD 拿 Content-Length → URL 去 query 后 SHA256 前 32 位作 contentMD5 标识 → 构造 descriptor。`OfflineAudioValidator` 对 `lx·` 来源跳过 MD5 比对（音源无官方 MD5），靠文件大小 + 完整解码 + 时长验证。
+
+**下载 0KB 卡住的排查**（诊断日志分类=下载）：日志显示 `NSURLErrorDomain -1001`（超时）。根因是后台下载请求不带 header、且请求超时只有 30s：
+
+- 对 `lx·` 来源的下载请求注入浏览器 UA，但**不带 Referer**——实测 `music.163.com` Referer 会让酷我/网易 CDN 触发防盗链（表现为超时）。注意这与播放路径不同：播放带 UA+Referer 是有效的，下载则不行。
+- `timeoutIntervalForRequest` 30→60s，`timeoutIntervalForResource` 120→240s；卡死下载超时失败并释放队列位，避免后续 20 个任务全堵在排队中（并发上限 2）。
+- `lxDownloadResource` 的 HEAD 请求也带浏览器 UA。
 
 ## 6. 诊断日志
 
@@ -116,7 +140,9 @@ play(tracks:) / togglePlayPause / advanceToNext
 
 1. 改 iOS 播放逻辑 → 只认 `PlayerServiceIOS.swift`。
 2. 遇到"改了没用" → 先确认改的文件是否真的参与 iOS 编译。
-3. 音源"可用"必须验证真实 URL，不能只看 scheme。
-4. 排查播放问题先看诊断日志，定位到具体步骤再动手。
-5. 日志落盘用追加式，别用整文件覆盖。
+3. 音源"可用"必须验证真实 URL，且要处理 JSON API 端点/302 重定向，不能见 JSON 就判失败。
+4. 排查播放/下载问题先看诊断日志（下载也有分类），定位到具体步骤再动手。
+5. 日志落盘用追加式，别用整文件覆盖；上限与预览都要限制，避免导出卡顿。
 6. 条件编译隔离的 macOS 代码保留即可，不要删。
+7. 播放与下载的 CDN header 策略不同：播放带 UA+Referer 有效，下载只需 UA（Referer 反触发防盗链）。
+8. 怀疑音源/引擎不兼容时，对照 LX 官方 preload 源码 + 用 node 忠实模拟宿主跑脚本，区分"代码问题"与"网络环境限制"。

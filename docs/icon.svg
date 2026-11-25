@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- 背景渐变：保留品牌红，加深下端制造立体感 -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FF6B5E"/>
+      <stop offset="55%" stop-color="#F0443A"/>
+      <stop offset="100%" stop-color="#C8231B"/>
+    </linearGradient>
+    <linearGradient id="glyph" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FFFFFF"/>
+      <stop offset="100%" stop-color="#F6EFEF"/>
+    </linearGradient>
+    <!-- 圆角矩形裁剪，iOS 超椭圆近似 -->
+    <clipPath id="squircle">
+      <rect x="64" y="64" width="896" height="896" rx="205" ry="205"/>
+    </clipPath>
+    <filter id="glyphShadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#7A100A" flood-opacity="0.28"/>
+    </filter>
+  </defs>
+
+  <!-- 底色 -->
+  <rect x="0" y="0" width="1024" height="1024" fill="url(#bg)"/>
+
+  <g clip-path="url(#squircle)">
+    <!-- 顶部柔光 -->
+    <ellipse cx="512" cy="120" rx="520" ry="300" fill="#FFFFFF" opacity="0.08"/>
+    <!-- 底部暗角 -->
+    <ellipse cx="512" cy="1000" rx="560" ry="260" fill="#6E0F09" opacity="0.18"/>
+
+    <!-- 音波装饰：右侧三条弧线，呼应「雲の音」 -->
+    <g fill="none" stroke="#FFFFFF" stroke-linecap="round" opacity="0.22">
+      <path d="M770 360 a150 150 0 0 1 0 300" stroke-width="20"/>
+      <path d="M812 300 a220 220 0 0 1 0 420" stroke-width="16" opacity="0.7"/>
+      <path d="M854 244 a286 286 0 0 1 0 532" stroke-width="12" opacity="0.45"/>
+    </g>
+
+    <!-- 主体 K 字形：粗笔画、圆角端点 -->
+    <g fill="url(#glyph)" filter="url(#glyphShadow)">
+      <!-- 竖笔 -->
+      <rect x="300" y="268" width="112" height="488" rx="56" ry="56"/>
+      <!-- 上斜笔 -->
+      <path d="M400 512 L628 292 A56 56 0 0 1 714 378 L494 596 Z"/>
+      <!-- 下斜笔 -->
+      <path d="M494 428 L714 646 A56 56 0 0 1 628 732 L400 512 Z"/>
+    </g>
+  </g>
+
+  <!-- 外描边高光 -->
+  <rect x="64" y="64" width="896" height="896" rx="205" ry="205"
+        fill="none" stroke="#FFFFFF" stroke-opacity="0.16" stroke-width="4"/>
+</svg>

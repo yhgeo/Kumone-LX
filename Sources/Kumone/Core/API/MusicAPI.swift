@@ -594,6 +594,8 @@ enum MusicAPI {
         var request = URLRequest(url: lx.url)
         request.httpMethod = "HEAD"
         request.timeoutInterval = 10
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15",
+                         forHTTPHeaderField: "User-Agent")
         let (_, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...206).contains(http.statusCode) else {
             throw OfflineAudioError.unavailable
