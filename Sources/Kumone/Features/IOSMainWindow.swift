@@ -42,11 +42,15 @@ public struct IOSMainWindow: View {
             .preferredColorScheme(settings.appearance.colorScheme)
             #if os(macOS)
             .onChange(of: settings.hiddenTabs) { _, hidden in
-                if hidden.contains(selectedTab.stableKey), selectedTab != .home { selectedTab = .home }
+                if hidden.contains(selectedTab.stableKey) {
+                    selectedTab = IOSTab.allCases.first { !hidden.contains($0.stableKey) } ?? .home
+                }
             }
             #else
             .onChange(of: settings.hiddenTabs) { hidden in
-                if hidden.contains(selectedTab.stableKey), selectedTab != .home { selectedTab = .home }
+                if hidden.contains(selectedTab.stableKey) {
+                    selectedTab = IOSTab.allCases.first { !hidden.contains($0.stableKey) } ?? .home
+                }
             }
             #endif
     }

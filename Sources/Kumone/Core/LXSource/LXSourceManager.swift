@@ -17,6 +17,15 @@ final class LXSourceManager: ObservableObject {
     @Published var testCache: [String: TestResult] = [:]
     @Published var lastError: String?
 
+    /// 本会话内解析失败/假 URL 的音源，短时间内跳过，避免每首都重复试错浪费时间。
+    private var failedKeys: [String: Date] = [:]
+    private let failureCooldown: TimeInterval = 300  // 5 分钟后允许重试，应对临时故障
+
+    /// 手动测试后清空失败黑名单，让用户能立即重试。
+    func resetFailures() {
+        failedKeys.removeAll()
+    }
+
     private let log = Logger(subsystem: "sb.moe.kumone", category: "lx-source-mgr")
     private let engine = LXSourceEngine.shared
     private let fm = FileManager.default
@@ -206,28 +215,38 @@ final class LXSourceManager: ObservableObject {
     /// 必须先验证再采用，否则 AVPlayer 加载失败就跳过整首歌。
     func resolve(track: Track, quality: String = "128k") async -> LXResolvedURL? {
         let diag = PlaybackDiagnostics.shared
+        let now = Date()
+        // 清掉过期的失败记录
+        failedKeys = failedKeys.filter { now.timeIntervalSince($0.value) < failureCooldown }
         let keys = enabledKeys
-        diag.log("音源", "播放解析启用音源 \(keys.count) 个: \(keys.joined(separator: ","))")
+        diag.log("音源", "播放解析启用音源 \(keys.count) 个: \(keys.joined(separator: ",")) 黑名单 \(failedKeys.count) 个")
         for key in keys {
+            // 冷却中的音源直接跳过，避免每首歌重复试错（幻音/长青等假 URL 音源）
+            if let failedAt = failedKeys[key], now.timeIntervalSince(failedAt) < failureCooldown {
+                diag.log("音源", "⊘ \(key) 在失败冷却中，跳过")
+                continue
+            }
             guard let meta = sources.first(where: { $0.key == key }) else { continue }
             let start = Date()
             await engine.loadScript(meta.rawScript, key: key)
-            // 异步 inited 的音源给一点初始化时间
-            try? await Task.sleep(for: .milliseconds(200))
-            // 每个音源整体 2 秒超时（引擎内部实现，避免 Swift 并发 Sendable 问题）
+            try? await Task.sleep(for: .milliseconds(120))
+            // 每个音源整体 2 秒超时（引擎内部实现）
             let result = try? await engine.resolve(musicInfo: track.lxMusicInfo, quality: quality, timeout: 2)
             let elapsed = Date().timeIntervalSince(start)
             guard let result else {
-                diag.log("音源", "✗ \(meta.name) key=\(key) 耗时\(String(format:"%.1f",elapsed))s 未返回URL")
+                failedKeys[key] = Date()
+                diag.log("音源", "✗ \(meta.name) key=\(key) 耗时\(String(format:"%.1f",elapsed))s 未返回URL（加入冷却）")
                 continue
             }
             // 验证 URL 真是音频，过滤假阳性（幻音等返回的无效地址）
             let valid = await verifyAudioURL(result.url)
             if valid {
+                failedKeys.removeValue(forKey: key)  // 成功则移出黑名单
                 diag.log("音源", "✓ \(meta.name) key=\(key) platform=\(result.sourceName) 耗时\(String(format:"%.1f",elapsed))s host=\(result.url.host() ?? "?") 验证通过")
                 return result
             } else {
-                diag.log("音源", "✗ \(meta.name) key=\(key) 返回URL验证失败 host=\(result.url.host() ?? "?") 换下一个音源")
+                failedKeys[key] = Date()
+                diag.log("音源", "✗ \(meta.name) key=\(key) 返回URL验证失败 host=\(result.url.host() ?? "?") 加入冷却")
             }
         }
         return nil
@@ -261,6 +280,7 @@ final class LXSourceManager: ObservableObject {
     /// 完全不通的音源自动取消启用。返回被禁用的音源名列表。
     @discardableResult
     func applyTestResults(_ results: [TestResult]) -> [String] {
+        failedKeys.removeAll()  // 测试结果刷新后重置冷却
         let okByKey = Dictionary(uniqueKeysWithValues: results.map { ($0.key, $0) })
         // 失败音源取消启用
         var disabled: [String] = []

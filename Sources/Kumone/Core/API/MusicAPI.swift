@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Typed API surface, mapped to eapi and web API endpoints.
 enum MusicAPI {
@@ -579,6 +580,43 @@ enum MusicAPI {
                                      client: MusicClient = .shared) async throws -> OfflineAudioResource {
         let data = try await songDownloadURL(id: track.id, level: level, client: client)
         return try downloadResource(data: data, track: track, accountScope: accountScope)
+    }
+
+    /// 从 LX 自定义音源解析下载地址，供官方接口不可用（VIP/风控）时兜底。
+    /// 音源 URL 没有 md5/size 元数据：用 HEAD 拿 Content-Length，
+    /// contentMD5 用 URL 的 SHA256 作稳定标识（校验改由完整解码保证，见
+    /// OfflineAudioValidator 对 lx 来源的跳过逻辑）。
+    static func lxDownloadResource(track: Track, level: String, accountScope: String) async throws -> OfflineAudioResource {
+        let lxQuality = LXSourceManager.lxQuality(for: level)
+        guard let lx = await LXSourceManager.shared.resolve(track: track, quality: lxQuality) else {
+            throw OfflineAudioError.unavailable
+        }
+        var request = URLRequest(url: lx.url)
+        request.httpMethod = "HEAD"
+        request.timeoutInterval = 10
+        let (_, response) = try await URLSession.shared.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200...206).contains(http.statusCode) else {
+            throw OfflineAudioError.unavailable
+        }
+        let size = http.expectedContentLength
+        guard size > 0 else { throw OfflineAudioError.unavailable }
+
+        let quality = AudioQuality(rawValue: level)?.badge ?? level
+        let format: OfflineAudioFormat = lxQuality.contains("flac") ? .flac : .mp3
+        // 稳定标识：URL 去掉签名查询串后取 SHA256 前 32 位作 contentMD5。
+        var components = URLComponents(url: lx.url, resolvingAgainstBaseURL: false)
+        components?.query = nil
+        let stableString = components?.url?.absoluteString ?? lx.url.absoluteString
+        let digest = SHA256.hash(data: Data(stableString.utf8))
+        let fakeMD5 = digest.map { String(format: "%02x", $0) }.joined().prefix(32).lowercased()
+        let source = "lx·\(lx.sourceName)"
+        let identity = OfflineAudioIdentity(accountScope: accountScope, trackID: track.id,
+                                            source: source, quality: quality,
+                                            format: format, contentMD5: String(fakeMD5))
+        let descriptor = OfflineAudioDescriptor(identity: identity, byteCount: size,
+                                                duration: track.duration)
+        try descriptor.validate()
+        return OfflineAudioResource(descriptor: descriptor, url: lx.url)
     }
 
     static func songDownloadURL(id: Int, level: String, client: MusicClient = .shared) async throws -> SongURLData {

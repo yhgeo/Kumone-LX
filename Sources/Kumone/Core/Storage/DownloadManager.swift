@@ -163,7 +163,13 @@ final class DownloadManager: ObservableObject {
 
     init(store: OfflineStore, metadata: OfflineMetadataStore, persistence: DownloadCatalogStore,
          transport: any DownloadTransport, accountScope: String?,
-         resolver: @escaping Resolver = { try await MusicAPI.songDownloadResource(track: $0, level: $1, accountScope: $2) },
+         resolver: @escaping Resolver = { track, level, scope in
+            // 官方下载可用时优先；VIP/风控/无版权失败则回退到 LX 自定义音源。
+            if let official = try? await MusicAPI.songDownloadResource(track: track, level: level, accountScope: scope) {
+                return official
+            }
+            return try await MusicAPI.lxDownloadResource(track: track, level: level, accountScope: scope)
+         },
          metadataFetcher: MetadataFetcher? = nil,
          metadataReader: ((Int, String) async -> Track?)? = nil,
          cachedTracks: @escaping () async -> Set<Int> = { await DownloadManager.platformCachedTrackIDs() },

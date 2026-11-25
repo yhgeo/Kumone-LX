@@ -1804,6 +1804,17 @@ private struct CompactTrackHeader: View {
                         onOpenDestination: onOpenDestination
                     )
                 }
+                // 当前实际播放来源与音质（官方 / LX 自定义音源 / 内置解锁源）
+                HStack(spacing: 5) {
+                    Image(systemName: player.unblockSource == nil ? "cloud" : "waveform.path.ecg")
+                        .font(.system(size: 9))
+                    Text(player.playbackSourceLabel)
+                    if let q = player.playbackQualityLabel { Text("· \(q)") }
+                    if player.isTrial { Text("· 试听") }
+                }
+                .font(.caption2)
+                .foregroundStyle(.white.opacity(0.5))
+                .accessibilityLabel("播放来源 \(player.playbackSourceLabel)")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .offset(

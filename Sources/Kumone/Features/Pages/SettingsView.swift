@@ -172,13 +172,14 @@ struct SettingsView: View {
                         set: { visible in
                             if visible {
                                 settings.hiddenTabs.removeAll { $0 == tab.stableKey }
-                            } else if tab != .home {
+                            } else if settings.hiddenTabs.count < IOSTab.allCases.count - 1 {
+                                // 至少保留一个可见 tab，避免全部隐藏导致白屏
                                 settings.hiddenTabs.append(tab.stableKey)
                             }
                         }
                     ))
                 }
-                Text("隐藏后底部不再显示该入口；「推荐」不可隐藏。隐藏页面里的功能（如搜索）仍可通过其它入口进入。")
+                Text("隐藏后底部不再显示该入口（至少保留一个）。隐藏页面里的功能仍可通过其它入口进入。")
                     .font(.caption).foregroundStyle(.secondary)
             } header: {
                 Text("底部标签")

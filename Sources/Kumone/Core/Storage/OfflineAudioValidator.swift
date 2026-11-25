@@ -8,12 +8,16 @@ enum OfflineAudioValidator {
     static func validate(url: URL, descriptor: OfflineAudioDescriptor) throws {
         let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize
         guard size.map(Int64.init) == descriptor.byteCount else { throw OfflineAudioError.incomplete }
-        let file = try FileHandle(forReadingFrom: url)
-        defer { try? file.close() }
-        var digest = Insecure.MD5()
-        while let data = try file.read(upToCount: 256 * 1024), !data.isEmpty { digest.update(data: data) }
-        let checksum = digest.finalize().map { String(format: "%02x", $0) }.joined()
-        guard checksum == descriptor.identity.contentMD5.lowercased() else { throw OfflineAudioError.checksumMismatch }
+        // LX 自定义音源的 URL 没有官方 MD5：contentMD5 只是 URL 的稳定标识，
+        // 不能用来校验文件内容。这类文件靠下面的完整解码 + 时长验证保证完整性。
+        if !descriptor.identity.source.hasPrefix("lx·") {
+            let file = try FileHandle(forReadingFrom: url)
+            defer { try? file.close() }
+            var digest = Insecure.MD5()
+            while let data = try file.read(upToCount: 256 * 1024), !data.isEmpty { digest.update(data: data) }
+            let checksum = digest.finalize().map { String(format: "%02x", $0) }.joined()
+            guard checksum == descriptor.identity.contentMD5.lowercased() else { throw OfflineAudioError.checksumMismatch }
+        }
         do {
             let audio = try AVAudioFile(forReading: url)
             guard let buffer = AVAudioPCMBuffer(pcmFormat: audio.processingFormat, frameCapacity: 16_384),
