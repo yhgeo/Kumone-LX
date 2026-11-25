@@ -109,7 +109,7 @@ struct LXSourceSettingsSection: View {
                 Text(err).font(.caption).foregroundStyle(.red)
             }
 
-            Text("用《晴天》实测标准/较高/极高/无损/Hi-Res 五档（与官方音质一致），每档最多 2 秒。结果直接显示在列表；可用且快的排前面，不通的自动停用。")
+            Text("用《晴天》实测标准/较高/极高/无损/Hi-Res 五档（与官方音质一致），每档最多 2 秒。结果直接显示在列表；可用且快的排前面；只用《晴天》一首探针，失败不代表该音源对其它歌不可用，故不自动停用。")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {
@@ -209,11 +209,11 @@ struct LXSourceSettingsSection: View {
         await MainActor.run { testingKey = key }
         let result = await manager.testSource(key)
         await MainActor.run {
-            let disabled = manager.applyTestResults([result])
+            manager.applyTestResults([result])
             testingKey = nil
             testResults = [result]
             showTestResult = true
-            if !disabled.isEmpty { manager.lastError = "该音源不通，已自动停用" }
+            
         }
     }
 
@@ -225,13 +225,10 @@ struct LXSourceSettingsSection: View {
         }
         await MainActor.run {
             isTestingAll = false
-            // 应用结果：成功且快的排前面，不通的自动取消启用
-            let disabled = manager.applyTestResults(results)
+            // 应用结果：成功且快的排前面
+            manager.applyTestResults(results)
             testResults = results
             showTestResult = true
-            if !disabled.isEmpty {
-                manager.lastError = "已自动停用 \(disabled.count) 个不通的音源：\(disabled.prefix(4).joined(separator: "、"))"
-            }
         }
     }
 

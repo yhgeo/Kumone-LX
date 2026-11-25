@@ -191,7 +191,8 @@ final class LXSourceManager: ObservableObject {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("bytes=0-2047", forHTTPHeaderField: "Range")
-        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
+        request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
         request.timeoutInterval = 3
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -282,15 +283,10 @@ final class LXSourceManager: ObservableObject {
     func applyTestResults(_ results: [TestResult]) -> [String] {
         failedKeys.removeAll()  // 测试结果刷新后重置冷却
         let okByKey = Dictionary(uniqueKeysWithValues: results.map { ($0.key, $0) })
-        // 失败音源取消启用
-        var disabled: [String] = []
-        for r in results where !r.ok {
-            if enabledKeys.contains(r.key) {
-                enabledKeys.removeAll { $0 == r.key }
-                disabled.append(r.name)
-            }
-        }
-        // 成功音源按耗时升序排到前面
+        // 只用《晴天》一首做探针，某首失败不等于音源不可用（很多音源靠歌名匹配）。
+        // 因此不再自动停用失败音源，只把它们排到后面，由用户自己决定。
+        let disabled: [String] = []
+        // 成功且快的排前面，失败的排后面
         enabledKeys.sort { a, b in
             let ra = okByKey[a], rb = okByKey[b]
             switch (ra?.ok, rb?.ok) {

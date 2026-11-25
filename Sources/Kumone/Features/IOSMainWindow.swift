@@ -18,7 +18,10 @@ public struct IOSMainWindow: View {
         settings.appearance.colorScheme ?? systemColorScheme
     }
 
-    @State private var selectedTab: IOSTab = .home
+    /// 记住上次选中的 tab，重启后恢复；若该 tab 已被隐藏则回退到第一个可见项。
+    @State private var selectedTab: IOSTab = IOSTab(
+        stableKey: UserDefaults.standard.string(forKey: "ios.selectedTab") ?? "home"
+    ) ?? .home
 
     /// Returning from the lock screen every few minutes must not rescan
 
@@ -40,6 +43,15 @@ public struct IOSMainWindow: View {
         UpstreamGate { gatedBody }
             .tint(Theme.accent)
             .preferredColorScheme(settings.appearance.colorScheme)
+            #if os(macOS)
+            .onChange(of: selectedTab) { _, tab in
+                UserDefaults.standard.set(tab.stableKey, forKey: "ios.selectedTab")
+            }
+            #else
+            .onChange(of: selectedTab) { tab in
+                UserDefaults.standard.set(tab.stableKey, forKey: "ios.selectedTab")
+            }
+            #endif
             #if os(macOS)
             .onChange(of: settings.hiddenTabs) { _, hidden in
                 if hidden.contains(selectedTab.stableKey) {
@@ -71,6 +83,10 @@ public struct IOSMainWindow: View {
             .environment(\.openDestination, openDestination)
             .modifier(PlaybackLifecycle())
             .task {
+                // 重启后：若记住的 tab 已被隐藏，回退到第一个可见项。
+                if settings.hiddenTabs.contains(selectedTab.stableKey) {
+                    selectedTab = IOSTab.allCases.first { !settings.hiddenTabs.contains($0.stableKey) } ?? .home
+                }
                 await DownloadManager.shared.start()
                 await account.bootstrap()
                 if settings.autoCheckUpdates, DistributionChannel.current.allowsSelfUpdate {

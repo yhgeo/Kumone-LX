@@ -1017,21 +1017,33 @@ final class PlayerService: ObservableObject {
     ) async -> ResolvedURLLoadResult {
         // Skip a CDN host that just failed to connect (see CDNHost).
         let remote = CDNHost.preferred(for: url)
-
-        var asset = AVURLAsset(url: remote)
+        // 第三方音源（LX/内置）的 CDN 常要求浏览器 UA 与 Referer，
+        // 裸 AVURLAsset / URLRequest 会被拒（表现为"LX成功却立刻跳过"）。
+        let isThirdParty = unblockSource != nil
+        var headers: [String: String] = [:]
+        if isThirdParty {
+            headers["User-Agent"] = "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15"
+            headers["Referer"] = "https://music.163.com/"
+        }
+        var assetOptions: [String: Any]? = nil
+        if !headers.isEmpty { assetOptions = [AVURLAssetHTTPHeaderFieldsKey: headers] }
+        var asset = AVURLAsset(url: remote, options: assetOptions)
         var resourceLoader: CachingAudioResourceLoader?
         if SettingsManager.shared.enableAudioCache, !isTrial {
             let cacheLimitMB = await SettingsManager.shared.effectiveAudioCacheSizeMB()
             guard generation == resolveGeneration else { return .superseded }
             let source: AudioCacheSource = unblockSource.map(AudioCacheSource.unblock) ?? .origin
             do {
+                var sessionConfig = URLSessionConfiguration.default
+                if !headers.isEmpty { sessionConfig.httpAdditionalHeaders = headers }
                 let loader = try CachingAudioResourceLoader(
                     remoteURL: remote,
                     trackID: track.id,
                     requestedQuality: SettingsManager.shared.audioQuality.rawValue,
                     servedQuality: servedQuality,
                     source: source,
-                    maximumCacheSizeMB: cacheLimitMB
+                    maximumCacheSizeMB: cacheLimitMB,
+                    sessionConfiguration: sessionConfig
                 )
                 guard generation == resolveGeneration else {
                     loader.cancel()
