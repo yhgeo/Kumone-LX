@@ -625,10 +625,19 @@ struct IOSMiniPlayerBar: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                Text(player.currentTrack?.artistNames ?? "")
-                    .font(artistFont)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text(player.currentTrack?.artistNames ?? "")
+                        .font(artistFont)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                    // 当前播放来源 + 音质（官方 / LX 音源 / 内置源）
+                    if !presentation.isInline, player.currentTrack != nil {
+                        Text("· \(player.playbackSourceLabel)\(player.playbackQualityLabel.map { " \($0)" } ?? "")")
+                            .font(.system(size: 8))
+                            .foregroundStyle(.tertiary)
+                            .lineLimit(1)
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }

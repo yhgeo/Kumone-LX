@@ -144,6 +144,25 @@ final class PlayerService: ObservableObject {
     @Published private(set) var servedQuality: String?
     @Published private(set) var unblockSource: String?
     @Published private(set) var isTrial = false
+
+    /// 当前实际播放来源：官方 / LX·音源名 / 内置解锁源名。
+    var playbackSourceLabel: String {
+        if let unblockSource, !unblockSource.isEmpty { return unblockSource }
+        return String(localized: "网易云官方")
+    }
+
+    /// 当前实际音质档位显示名：官方用返回的 level，音源用用户请求的档位。
+    var playbackQualityLabel: String? {
+        if let servedQuality {
+            switch servedQuality {
+            case "sky", "hires": return "Hi-Res"
+            default: return AudioQuality(rawValue: servedQuality)?.badge ?? servedQuality.uppercased()
+            }
+        }
+        if unblockSource != nil { return SettingsManager.shared.audioQuality.badge }
+        return nil
+    }
+
     let clock = PlaybackClock()
     let lyricsCursor = LyricsCursor()
     let sleepTimer = SleepTimer()
