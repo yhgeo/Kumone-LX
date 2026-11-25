@@ -1026,7 +1026,7 @@ final class PlayerService: ObservableObject {
             headers["Referer"] = "https://music.163.com/"
         }
         var assetOptions: [String: Any]? = nil
-        if !headers.isEmpty { assetOptions = [AVURLAssetHTTPHeaderFieldsKey: headers] }
+        if !headers.isEmpty { assetOptions = ["AVURLAssetHTTPHeaderFieldsKey": headers] }
         var asset = AVURLAsset(url: remote, options: assetOptions)
         var resourceLoader: CachingAudioResourceLoader?
         if SettingsManager.shared.enableAudioCache, !isTrial {
