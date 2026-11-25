@@ -316,7 +316,12 @@ final class LXSourceManager: ObservableObject {
     }
 
     /// 对单个音源做实测：加载脚本 -> 逐音质解析样例歌 -> 记录耗时/结果。
-    func testSource(_ key: String) async -> TestResult {
+    /// - Parameters:
+    ///   - timeout: 单档音质的解析超时秒数（用户可调 1~15）。
+    ///   - qualities: 要测试的官方音质档位 key 列表（用户可只选一档）。
+    func testSource(_ key: String, timeout: TimeInterval = 3,
+                    qualities: [String]? = nil) async -> TestResult {
+        let testQualities = qualities ?? Self.testQualities
         guard let meta = sources.first(where: { $0.key == key }) else {
             return TestResult(key: key, name: key, ok: false, elapsed: 0,
                               platform: nil, message: "未找到音源")
@@ -342,11 +347,12 @@ final class LXSourceManager: ObservableObject {
         var firstOK: LXResolvedURL?
         // 用官方五档逐档测；每档映射成 lx 音质值传给音源，显示用官方中文名。
         // 先测有损三档（标准/较高/极高），全失败则跳过无损两档。每档最多 2 秒。
-        for (idx, q) in Self.testQualities.enumerated() {
-            if idx >= 3, firstOK == nil { break }
+        for (idx, q) in testQualities.enumerated() {
+            // 默认五档时：前三档有损全失败就跳过后两档无损；用户自定义时全测。
+            if qualities == nil, idx >= 3, firstOK == nil { break }
             let qStart = Date()
             let lxQ = Self.lxQuality(for: q)
-            if let result = try? await engine.resolve(musicInfo: sample, quality: lxQ, timeout: 2),
+            if let result = try? await engine.resolve(musicInfo: sample, quality: lxQ, timeout: timeout),
                await verifyAudioURL(result.url) {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: true, elapsed: e))

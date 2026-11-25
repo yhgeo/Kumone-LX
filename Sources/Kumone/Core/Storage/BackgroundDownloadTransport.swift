@@ -138,6 +138,8 @@ final class BackgroundDownloadTransport: DownloadTransport {
         config.urlCache = nil
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         config.timeoutIntervalForRequest = 30
+        // 单个下载最多 2 分钟；卡死时超时失败并释放队列位，避免后面全部堵在排队中。
+        config.timeoutIntervalForResource = 120
         let queue = OperationQueue()
         queue.maxConcurrentOperationCount = 1
         session = URLSession(configuration: config, delegate: delegate, delegateQueue: queue)
@@ -173,6 +175,12 @@ final class BackgroundDownloadTransport: DownloadTransport {
         request.allowsExpensiveNetworkAccess = allowsMetered
         request.allowsConstrainedNetworkAccess = allowsMetered
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        // 第三方音源下载的 CDN 同样要浏览器 UA/Referer，否则卡在 0KB 不动。
+        if resource.descriptor.identity.source.hasPrefix("lx·") {
+            request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15",
+                             forHTTPHeaderField: "User-Agent")
+            request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
+        }
         let task = resumeData.map { session.downloadTask(withResumeData: $0) } ?? session.downloadTask(with: request)
         task.taskDescription = token
         tasks[token] = task

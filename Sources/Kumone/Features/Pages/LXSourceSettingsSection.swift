@@ -18,6 +18,16 @@ struct LXSourceSettingsSection: View {
     @State private var isImportingAll = false
     @State private var importAllResult: String?
     @State private var showImportAllResult = false
+    /// 测试参数：单档超时秒数、测试音质集合（可多选）。
+    @AppStorage("lx.testTimeout") private var testTimeout = 3
+    @AppStorage("lx.testQualities") private var testQualityRaw = ""
+    private var selectedQualities: [String] {
+        let all = AudioQuality.allCases.map(\.rawValue)
+        guard !testQualityRaw.isEmpty else { return all }
+        let chosen = Set(testQualityRaw.split(separator: ",").map(String.init))
+        let filtered = all.filter { chosen.contains($0) }
+        return filtered.isEmpty ? all : filtered
+    }
 
     var body: some View {
         Section {
@@ -76,6 +86,34 @@ struct LXSourceSettingsSection: View {
             }
 
             if !manager.sources.isEmpty {
+                // 测试参数设置：超时 + 音质多选
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("每档超时").font(.caption)
+                        Spacer()
+                        Stepper("\(testTimeout) 秒", value: $testTimeout, in: 1...15)
+                            .font(.caption)
+                    }
+                    Text("测试音质").font(.caption)
+                    HStack(spacing: 6) {
+                        ForEach(AudioQuality.allCases) { q in
+                            let isOn = selectedQualities.contains(q.rawValue)
+                            Button {
+                                toggleQuality(q.rawValue)
+                            } label: {
+                                Text(q.displayName)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(isOn ? Color.accentColor : Color.secondary.opacity(0.15))
+                                    .foregroundStyle(isOn ? .white : .primary)
+                                    .clipShape(Capsule())
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+
                 Button {
                     Task { await testAll() }
                 } label: {
@@ -205,9 +243,23 @@ struct LXSourceSettingsSection: View {
         }
     }
 
+    /// 切换某个测试音质；空集合视为全选，因此点最后一个时会保留它自己。
+    private func toggleQuality(_ raw: String) {
+        var current = selectedQualities
+        if current.contains(raw) {
+            if current.count > 1 { current.removeAll { $0 == raw } }
+        } else {
+            current.append(raw)
+        }
+        // 按官方档位顺序存，保证稳定
+        testQualityRaw = AudioQuality.allCases.map(\.rawValue)
+            .filter { current.contains($0) }.joined(separator: ",")
+    }
+
     private func test(_ key: String) async {
         await MainActor.run { testingKey = key }
-        let result = await manager.testSource(key)
+        let result = await manager.testSource(key, timeout: TimeInterval(testTimeout),
+                                              qualities: selectedQualities)
         await MainActor.run {
             manager.applyTestResults([result])
             testingKey = nil
@@ -221,7 +273,8 @@ struct LXSourceSettingsSection: View {
         await MainActor.run { isTestingAll = true }
         var results: [LXSourceManager.TestResult] = []
         for source in manager.orderedSources {
-            results.append(await manager.testSource(source.key))
+            results.append(await manager.testSource(source.key, timeout: TimeInterval(testTimeout),
+                                                    qualities: selectedQualities))
         }
         await MainActor.run {
             isTestingAll = false

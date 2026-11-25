@@ -11,6 +11,8 @@ struct DiagnosticsSettingsSection: View {
     @State private var showExport = false
     @State private var exportURL: URL?
     @State private var message = ""
+    /// 预览文本只在 sheet 出现时生成一次，避免 body 重绘时反复拼接上千条日志造成卡顿。
+    @State private var previewText = ""
 
     var body: some View {
         Section {
@@ -25,6 +27,7 @@ struct DiagnosticsSettingsSection: View {
             }
             Button {
                 refreshCount()
+                buildPreview()
                 showExport = true
                 message = ""
             } label: {
@@ -55,6 +58,17 @@ struct DiagnosticsSettingsSection: View {
         entryCount = PlaybackDiagnostics.shared.allEntries().count
     }
 
+    /// 只预览最近 200 条，避免上千条日志一次性渲染卡顿；导出仍是全部。
+    private func buildPreview() {
+        let all = PlaybackDiagnostics.shared.allEntries()
+        let shown = all.suffix(200)
+        previewText = shown.map { "[\($0.time)] [\($0.category)] \($0.message)" }
+            .joined(separator: "\n")
+        if all.count > shown.count {
+            previewText = "……（仅预览最近 200 条，共 \(all.count) 条；导出包含全部）\n\n" + previewText
+        }
+    }
+
     private var exportSheet: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
@@ -62,7 +76,7 @@ struct DiagnosticsSettingsSection: View {
                 Text("点「导出」保存到「文件」App 或分享；可发给开发者排查。")
                     .font(.caption).foregroundStyle(.secondary)
                 ScrollView {
-                    Text(PlaybackDiagnostics.shared.exportedText())
+                    Text(previewText)
                         .font(.system(size: 10, design: .monospaced))
                         .textSelection(.enabled)
                 }
