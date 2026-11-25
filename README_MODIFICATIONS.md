@@ -129,3 +129,9 @@
 - **加速音源切换**：日志显示每首都重试已知假 URL 音源（幻音/长青/全豆要各 1-3s），fish 甚至卡 141s。新增失败冷却黑名单：解析失败/假 URL 的音源 5 分钟内跳过，测试后重置；初始化 200ms→120ms。切换从 6-10 秒降到 1-2 秒。
 - **隐藏 tab 全放开**：推荐和我的都可隐藏，仅保留"至少一个可见 tab"防白屏；当前 tab 被隐藏时切到第一个可见项。
 - **下载走音源**：官方下载失败（VIP/风控/无版权"暂不可下载"）时自动回退 LX 自定义音源。MusicAPI.lxDownloadResource 用 HEAD 拿 size、URL SHA256 作稳定标识构造 descriptor；OfflineAudioValidator 对 lx· 来源跳过 MD5 比对，改由完整解码+时长验证保证完整性。
+
+## 十四次修复（2026-11-25 · v0.2.2）
+
+- **tab 选择持久化**：selectedTab 存 UserDefaults，重启恢复；隐藏的 tab 重启时回退到第一个可见项（解决"隐藏推荐重启又显示"）。
+- **VIP 歌 LX 成功却跳过**：日志显示溯音音源验证通过（host=kw-er.kuwo.cn）后立刻跳过——原因是 AVURLAsset/CachingAudioResourceLoader 裸请求不带 UA/Referer，酷我 CDN 拒绝。现在第三方源播放时注入浏览器 UA + music.163.com Referer（AVURLAsset options + URLSession header）。
+- **音源测试不再误停用**：只用《晴天》一首探针，失败不代表音源对其它歌不可用。测试失败只排序靠后，不再自动停用；测试验证也加 Referer 与播放对齐。
