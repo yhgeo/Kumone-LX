@@ -116,3 +116,9 @@
 - **假 URL 根治**：日志显示幻音音源 0.2s"成功"但每首都同一无效 host，AVPlayer 加载失败就跳过。现在 LX resolve 与测试都会对返回的 URL 发 Range 请求验证（状态码 200~206、非 text/html/json、有实体），假 URL 自动淘汰换下一个音源。
 - **音质对齐**：音源测试五档改为官方的 标准/较高/极高/无损/Hi-Res，显示中文名；映射 标准→128k、较高/极高→320k、无损→flac、Hi-Res→flac24bit。
 - **官方风控修复**：eapi 头此前自相矛盾（UA=iPhone 但 osver=Windows、os=pc），易被判伪造。统一为 iOS 客户端头（os=ios、osver=16.6.1、appver=9.1.90）。设置→系统→接口可切换 pc/ios 对照测试。
+
+## 十二次修复（2026-11-25 · v0.2.0）
+
+- **播放来源/音质可视化**：mini player 副标题与沉浸播放页 metadata 显示当前实际来源（网易云官方 / LX·音源名 / 内置解锁源）与音质档位，试听加标记。PlayerService 与 PlayerServiceIOS 均加 playbackSourceLabel/playbackQualityLabel 计算属性。
+- **文档整理**：README.md 重写为中文、聚焦本定制版改动；README_CN.md 精简指向；新增 TECHNICAL_NOTES.md 系统记录架构（两套 PlayerService）、解析链、LX 宿主协议、假 URL 验证、风控修复、诊断日志、归档、构建 CI 与踩坑经验。
+- **macOS 代码评估**：确认 61 个整文件 `#if os(macOS)` 与 10 个 `#if os(iOS)` 条件编译隔离，macOS 代码对 iOS 构建零影响（不产符号、不增体积），保留不动；面向 iOS 的改动只落 PlayerServiceIOS.swift。
