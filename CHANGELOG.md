@@ -2,6 +2,13 @@
 
 Kumone-LX 定制版版本记录（基于 missuo/kumone）。完整改动说明见 [README_MODIFICATIONS.md](README_MODIFICATIONS.md)，架构与排查见 [TECHNICAL_NOTES.md](TECHNICAL_NOTES.md)。
 
+## 0.2.6 - 2026-11-25
+
+- 修复下载超时 -1001：网络访问权限拆分（廉价/受限网络放行），仅蜂窝受设置控制
+- 播放列表加入当前播放曲目并自动定位、高亮
+- 音源显示真实名字（如「LX·溯音音源·kw」）而非 kw/mg 缩写
+- 过滤酷我「仅可在最新版播放」试听提示音片段
+
 ## 0.2.4 - 2026-11-25
 
 - 修复 URL 验证误杀 JSON API 端点型音源（跟随 302、解析 JSON 中真实直链）
