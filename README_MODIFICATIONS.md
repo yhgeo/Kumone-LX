@@ -135,3 +135,10 @@
 - **tab 选择持久化**：selectedTab 存 UserDefaults，重启恢复；隐藏的 tab 重启时回退到第一个可见项（解决"隐藏推荐重启又显示"）。
 - **VIP 歌 LX 成功却跳过**：日志显示溯音音源验证通过（host=kw-er.kuwo.cn）后立刻跳过——原因是 AVURLAsset/CachingAudioResourceLoader 裸请求不带 UA/Referer，酷我 CDN 拒绝。现在第三方源播放时注入浏览器 UA + music.163.com Referer（AVURLAsset options + URLSession header）。
 - **音源测试不再误停用**：只用《晴天》一首探针，失败不代表音源对其它歌不可用。测试失败只排序靠后，不再自动停用；测试验证也加 Referer 与播放对齐。
+
+## 十五次修复（2026-11-25 · v0.2.3）
+
+- **下载进度 0KB 卡住**：与播放同源问题——LX 音源下载请求不带 UA/Referer 被 CDN 拒。BackgroundDownloadTransport.start 对 lx· 来源注入浏览器头；加 timeoutIntervalForResource=120s，卡死下载超时失败并释放队列位，避免后续全部堵在排队中。
+- **日志导出卡顿**：exportSheet 的 body 里直接 Text(exportedText()) 每次重绘拼接上千条。改为点导出时生成一次预览、只显示最近 200 条；完整内容仍写入导出文件。
+- **音源测试可配置**：新增每档超时 Stepper（1~15 秒，默认 3）与音质多选（标准/较高/极高/无损/Hi-Res），存 UserDefaults；testSource 接受 timeout/qualities 参数。
+- **可用音源统计**：从日志最后一次完整测试统计，实测可用 4 个（溯音5档、fish5档、星海3档、非常刀2档），15 个全失败。GitHub 显示"可用"多但本 App 少，主因是本机 URL 验证过滤假 URL + 测试探针歌《晴天》单曲限制。
