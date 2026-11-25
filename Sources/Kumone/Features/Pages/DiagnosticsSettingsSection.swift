@@ -13,6 +13,8 @@ struct DiagnosticsSettingsSection: View {
     @State private var message = ""
     /// 预览文本只在 sheet 出现时生成一次，避免 body 重绘时反复拼接上千条日志造成卡顿。
     @State private var previewText = ""
+    @State private var logFilter = "全部"
+    private static let filters = ["全部", "播放", "解析", "官方", "兜底", "音源", "测试", "下载", "系统"]
 
     var body: some View {
         Section {
@@ -61,11 +63,14 @@ struct DiagnosticsSettingsSection: View {
     /// 只预览最近 200 条，避免上千条日志一次性渲染卡顿；导出仍是全部。
     private func buildPreview() {
         let all = PlaybackDiagnostics.shared.allEntries()
-        let shown = all.suffix(200)
+        let filtered = logFilter == "全部" ? all : all.filter { $0.category == logFilter }
+        let shown = filtered.suffix(200)
         previewText = shown.map { "[\($0.time)] [\($0.category)] \($0.message)" }
             .joined(separator: "\n")
-        if all.count > shown.count {
-            previewText = "……（仅预览最近 200 条，共 \(all.count) 条；导出包含全部）\n\n" + previewText
+        if shown.isEmpty {
+            previewText = "（该分类暂无记录）"
+        } else if filtered.count > shown.count {
+            previewText = "……（仅预览最近 200 条，共 \(filtered.count) 条；导出包含全部）\n\n" + previewText
         }
     }
 
@@ -75,6 +80,15 @@ struct DiagnosticsSettingsSection: View {
                 Text("播放诊断日志（\(entryCount) 条）").font(.headline)
                 Text("点「导出」保存到「文件」App 或分享；可发给开发者排查。")
                     .font(.caption).foregroundStyle(.secondary)
+                Picker("查看分类", selection: $logFilter) {
+                    ForEach(Self.filters, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.menu)
+                #if os(macOS)
+                .onChange(of: logFilter) { _, _ in buildPreview() }
+                #else
+                .onChange(of: logFilter) { _ in buildPreview() }
+                #endif
                 ScrollView {
                     Text(previewText)
                         .font(.system(size: 10, design: .monospaced))

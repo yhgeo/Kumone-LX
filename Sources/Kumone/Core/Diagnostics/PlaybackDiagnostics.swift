@@ -17,7 +17,7 @@ final class PlaybackDiagnostics {
 
     private let lock = NSLock()
     private var entries: [DiagnosticEntry] = []
-    private let maxEntries = 2000
+    private let maxEntries = 600
     /// 追加式文本日志：每条直接 append，绝不被整文件重写覆盖。
     private let textFile: URL
     private let dateFormatter: DateFormatter = {

@@ -93,28 +93,15 @@ private struct ArchiveDayView: View {
                         .disabled(snapshot.tracks.isEmpty)
                     }
                     Section("歌曲") {
-                        ForEach(snapshot.tracks) { t in
-                            Button {
-                                player.play(tracks: snapshot.tracks, source: .daily,
-                                            startAt: t, context: .daily)
-                            } label: {
-                                HStack(spacing: 10) {
-                                    if let pic = t.album.picUrl, let url = pic.resizedImageURL(120) {
-                                        CachedAsyncImage(url: url)
-                                            .frame(width: 48, height: 48)
-                                            .clipShape(RoundedRectangle(cornerRadius: 6))
-                                    }
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(t.name)
-                                            .font(.system(size: 14, weight: .medium))
-                                            .foregroundStyle(.primary)
-                                        Text(t.artistNames)
-                                            .font(.caption)
-                                            .foregroundStyle(.secondary)
-                                    }
+                        ForEach(Array(snapshot.tracks.enumerated()), id: \.element.id) { index, t in
+                            TrackRow(
+                                track: t,
+                                index: index + 1,
+                                onPlay: {
+                                    player.play(tracks: snapshot.tracks, source: .daily,
+                                                startAt: t, context: .daily)
                                 }
-                            }
-                            .buttonStyle(.plain)
+                            )
                         }
                     }
                 }

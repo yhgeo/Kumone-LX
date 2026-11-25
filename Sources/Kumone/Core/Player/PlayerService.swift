@@ -215,6 +215,15 @@ final class PlayerService: ObservableObject {
         return playNextList + Array(rest.prefix(200))
     }
 
+    /// 当前歌曲之前的曲目（最近 100 首），供播放列表展示与回跳。
+    var playedTracks: [Track] {
+        guard !activeQueue.isEmpty, currentIndex > 0 else { return [] }
+        let upper = min(currentIndex, activeQueue.count)
+        return Array(activeQueue[0..<upper].suffix(100))
+    }
+
+    func playQueuedTrack(_ track: Track) { playTrack(track) }
+
     var hasCurrentTrack: Bool { currentTrack != nil }
 
     // MARK: - Engine

@@ -2134,6 +2134,48 @@ private struct CompactQueueContent: View {
                 }
             }
 
+            // 已播放：当前歌曲之前的曲目，可点击回跳
+            if !player.playedTracks.isEmpty {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("已播放")
+                        .font(.title3.weight(.bold))
+                        .foregroundStyle(.white)
+                    Spacer()
+                    Text("\(player.playedTracks.count) 首")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.46))
+                }
+                ScrollView(showsIndicators: false) {
+                    LazyVStack(spacing: 4) {
+                        ForEach(player.playedTracks) { track in
+                            Button { player.playQueuedTrack(track) } label: {
+                                HStack(spacing: 11) {
+                                    CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(120), animated: false)
+                                        .frame(width: 40, height: 40)
+                                        .clipShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(track.name)
+                                            .font(.subheadline.weight(.semibold))
+                                            .foregroundStyle(.white.opacity(0.72))
+                                            .lineLimit(1)
+                                        Text(track.artistNames)
+                                            .font(.caption)
+                                            .foregroundStyle(.white.opacity(0.38))
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "backward.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.white.opacity(0.35))
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 180)
+            }
+
             HStack(alignment: .firstTextBaseline) {
                 Text("继续播放")
                     .font(.title3.weight(.bold))

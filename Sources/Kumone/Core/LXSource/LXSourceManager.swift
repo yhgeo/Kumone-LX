@@ -185,29 +185,44 @@ final class LXSourceManager: ObservableObject {
                             version: field("version"), description: field("description"), rawScript: raw)
     }
 
-    /// 验证音源返回的 URL 是否真的是可播音频，而不是网页/反爬提示/空响应。
-    /// 用 Range 请求只取前 2KB，检查状态码与 Content-Type，避免整段下载。
-    private func verifyAudioURL(_ url: URL) async -> Bool {
+    /// 验证音源 URL 是否可播，并返回「最终可播的 URL」。
+    /// 音源返回的可能是：直链音频 / 302 转发 / JSON API 端点（需解析出真实 url）。
+    /// 用 Range 请求只取前 2KB，IAM 跟随重定向；JSON 则提取 url 字段递归验证。
+    /// 返回 nil 表示不可用。
+    private func verifyAudioURL(_ url: URL, depth: Int = 0) async -> URL? {
+        if depth > 2 { return nil }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("bytes=0-2047", forHTTPHeaderField: "Range")
         request.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15", forHTTPHeaderField: "User-Agent")
         request.setValue("https://music.163.com/", forHTTPHeaderField: "Referer")
-        request.timeoutInterval = 3
+        request.timeoutInterval = 4
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let http = response as? HTTPURLResponse else { return false }
-            // 200 或 206 才算有效
-            guard (200...206).contains(http.statusCode) else { return false }
+            guard let http = response as? HTTPURLResponse else { return nil }
+            guard (200...206).contains(http.statusCode) else { return nil }
             let contentType = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
-            // 明确是网页/JSON 的一律拒绝（反爬、错误页、登录跳转）
-            if contentType.contains("text/html") || contentType.contains("json")
-                || contentType.contains("text/plain") { return false }
-            // 有实体内容即可（音频常为 audio/* 或 application/octet-stream，
-            // 有的音源不给 Content-Type，靠返回字节判断）
-            return !data.isEmpty
+            // 重定向到最终地址：URLSession 默认跟随，response.url 即最终地址
+            let finalURL = response.url ?? url
+            // JSON API 端点：解析常见字段里的真实 url，递归验证
+            if contentType.contains("json") || contentType.contains("javascript"),
+               let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                for key in ["url", "data", "musicUrl", "link", "playUrl"] {
+                    if let s = obj[key] as? String, let u = URL(string: s), s.hasPrefix("http") {
+                        return await verifyAudioURL(u, depth: depth + 1)
+                    }
+                    if let nested = obj[key] as? [String: Any],
+                       let s = nested["url"] as? String, let u = URL(string: s), s.hasPrefix("http") {
+                        return await verifyAudioURL(u, depth: depth + 1)
+                    }
+                }
+                return nil
+            }
+            // 网页/纯文本错误页：拒绝
+            if contentType.contains("text/html") || contentType.contains("text/plain") { return nil }
+            return data.isEmpty ? nil : finalURL
         } catch {
-            return false
+            return nil
         }
     }
 
@@ -239,12 +254,11 @@ final class LXSourceManager: ObservableObject {
                 diag.log("音源", "✗ \(meta.name) key=\(key) 耗时\(String(format:"%.1f",elapsed))s 未返回URL（加入冷却）")
                 continue
             }
-            // 验证 URL 真是音频，过滤假阳性（幻音等返回的无效地址）
-            let valid = await verifyAudioURL(result.url)
-            if valid {
+            // 验证 URL 真是音频，并用解析出的最终地址替换（JSON API 端点需解析）
+            if let finalURL = await verifyAudioURL(result.url) {
                 failedKeys.removeValue(forKey: key)  // 成功则移出黑名单
-                diag.log("音源", "✓ \(meta.name) key=\(key) platform=\(result.sourceName) 耗时\(String(format:"%.1f",elapsed))s host=\(result.url.host() ?? "?") 验证通过")
-                return result
+                diag.log("音源", "✓ \(meta.name) key=\(key) platform=\(result.sourceName) 耗时\(String(format:"%.1f",elapsed))s host=\(finalURL.host() ?? "?") 验证通过")
+                return LXResolvedURL(url: finalURL, sourceName: result.sourceName)
             } else {
                 failedKeys[key] = Date()
                 diag.log("音源", "✗ \(meta.name) key=\(key) 返回URL验证失败 host=\(result.url.host() ?? "?") 加入冷却")
@@ -353,11 +367,11 @@ final class LXSourceManager: ObservableObject {
             let qStart = Date()
             let lxQ = Self.lxQuality(for: q)
             if let result = try? await engine.resolve(musicInfo: sample, quality: lxQ, timeout: timeout),
-               await verifyAudioURL(result.url) {
+               let finalURL = await verifyAudioURL(result.url) {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: true, elapsed: e))
-                diag.log("测试", "\(meta.name) \(q)(\(lxQ)) ✓ \(String(format:"%.1f",e))s platform=\(result.sourceName)")
-                if firstOK == nil { firstOK = result }
+                diag.log("测试", "\(meta.name) \(q)(\(lxQ)) ✓ \(String(format:"%.1f",e))s platform=\(result.sourceName) host=\(finalURL.host() ?? "?")")
+                if firstOK == nil { firstOK = LXResolvedURL(url: finalURL, sourceName: result.sourceName) }
             } else {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: false, elapsed: e))

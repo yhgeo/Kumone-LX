@@ -164,11 +164,17 @@ final class DownloadManager: ObservableObject {
     init(store: OfflineStore, metadata: OfflineMetadataStore, persistence: DownloadCatalogStore,
          transport: any DownloadTransport, accountScope: String?,
          resolver: @escaping Resolver = { track, level, scope in
+            let diag = PlaybackDiagnostics.shared
+            diag.log("下载", "《\(track.name)》开始解析下载地址 level=\(level)")
             // 官方下载可用时优先；VIP/风控/无版权失败则回退到 LX 自定义音源。
             if let official = try? await MusicAPI.songDownloadResource(track: track, level: level, accountScope: scope) {
+                diag.log("下载", "《\(track.name)》官方地址 host=\(official.url.host() ?? "?") size=\(official.descriptor.byteCount)")
                 return official
             }
-            return try await MusicAPI.lxDownloadResource(track: track, level: level, accountScope: scope)
+            diag.log("下载", "《\(track.name)》官方不可用，回退 LX 音源")
+            let lx = try await MusicAPI.lxDownloadResource(track: track, level: level, accountScope: scope)
+            diag.log("下载", "《\(track.name)》LX地址 host=\(lx.url.host() ?? "?") size=\(lx.descriptor.byteCount)")
+            return lx
          },
          metadataFetcher: MetadataFetcher? = nil,
          metadataReader: ((Int, String) async -> Track?)? = nil,
@@ -714,6 +720,7 @@ final class DownloadManager: ObservableObject {
             publish()
             try await persist()
             guard current(job), let i = index(job.id) else { await store.releaseDownloadReservation(token: token); return }
+            PlaybackDiagnostics.shared.log("下载", "《\(job.track.name)》开始传输 source=\(resource.descriptor.identity.source) token=\(token)")
             transport.start(resource: resource, token: token, allowsMetered: catalog.jobs[i].liveTransferAllowsMetered, resumeData: resumeData)
             fetchMetadata(job)
         } catch {
@@ -808,6 +815,7 @@ final class DownloadManager: ObservableObject {
     }
 
     private func complete(job: DownloadJob, descriptor: OfflineAudioDescriptor) async {
+        PlaybackDiagnostics.shared.log("下载", "《\(job.track.name)》下载完成并校验通过 size=\(descriptor.byteCount)")
         guard current(job) else { return }
         do {
             try await store.retain(id: descriptor.identity.id, owner: job.retentionOwner)
@@ -851,6 +859,7 @@ final class DownloadManager: ObservableObject {
 
     private func fail(job: DownloadJob, error: Error) async {
         guard current(job) else { return }
+        PlaybackDiagnostics.shared.log("下载", "《\(job.track.name)》失败: \(error.localizedDescription)")
         if let token = job.token { await store.releaseDownloadReservation(token: token) }
         guard current(job), let i = index(job.id) else { return }
         let delays: [Duration] = [.seconds(1), .seconds(2), .seconds(4)]
