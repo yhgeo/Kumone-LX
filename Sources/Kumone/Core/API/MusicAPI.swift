@@ -611,7 +611,7 @@ enum MusicAPI {
         let stableString = components?.url?.absoluteString ?? lx.url.absoluteString
         let digest = SHA256.hash(data: Data(stableString.utf8))
         let fakeMD5 = digest.map { String(format: "%02x", $0) }.joined().prefix(32).lowercased()
-        let source = "lx·\(lx.sourceName)"
+        let source = "lx·\(lx.sourceLabel ?? lx.sourceName)"
         let identity = OfflineAudioIdentity(accountScope: accountScope, trackID: track.id,
                                             source: source, quality: quality,
                                             format: format, contentMD5: String(fakeMD5))

@@ -919,7 +919,8 @@ final class PlayerService: ObservableObject {
             diag.log("兜底", "《\(track.name)》进入音源兜底")
             if let lx = await LXSourceManager.shared.resolve(track: track, quality: lxQuality) {
                 diag.log("兜底", "《\(track.name)》LX成功 platform=\(lx.sourceName) host=\(lx.url.host() ?? "?")")
-                unblockSource = "LX·\(lx.sourceName)"
+                // 显示真正的音源名字（如「溯音音源·酷我」），而不是 kw/mg 平台缩写。
+                unblockSource = "LX·\(lx.sourceLabel ?? lx.sourceName)·\(lx.sourceName)"
                 servedQuality = nil
                 isTrial = false
                 let result = await loadResolvedURL(track, url: lx.url, durationMS: nil,

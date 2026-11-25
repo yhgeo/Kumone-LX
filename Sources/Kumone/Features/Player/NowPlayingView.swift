@@ -2139,7 +2139,7 @@ private struct CompactQueueContent: View {
                     .font(.title3.weight(.bold))
                     .foregroundStyle(.white)
                 Spacer()
-                Text("\(player.playedTracks.count + player.upcomingTracks.count) 首")
+                Text("\(player.playedTracks.count + player.upcomingTracks.count + (player.currentTrack == nil ? 0 : 1)) 首")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.white.opacity(0.46))
             }
@@ -2155,29 +2155,47 @@ private struct CompactQueueContent: View {
                 .foregroundStyle(.white.opacity(0.5))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
-                ScrollView(showsIndicators: false) {
-                    LazyVStack(spacing: 4) {
-                        PlaybackHandoffList()
-                            .padding(.bottom, 4)
-                        // 已播放曲目与待播放用同一行样式，灰化显示，点击可回跳
-                        ForEach(player.playedTracks) { track in
-                            CompactQueueRow(track: track, upcomingIndex: 0, isPlayed: true)
+                ScrollViewReader { proxy in
+                    ScrollView(showsIndicators: false) {
+                        LazyVStack(spacing: 4) {
+                            PlaybackHandoffList()
+                                .padding(.bottom, 4)
+                            // 已播放曲目：灰化显示，点击可回跳
+                            ForEach(player.playedTracks) { track in
+                                CompactQueueRow(track: track, upcomingIndex: 0, isPlayed: true)
+                                    .id("played-\(track.id)")
+                            }
+                            // 当前播放：高亮显示并定位
+                            if let current = player.currentTrack {
+                                CompactQueueRow(track: current, upcomingIndex: 0, isCurrent: true)
+                                    .id("current-\(current.id)")
+                            }
+                            ForEach(
+                                Array(player.upcomingTracks.prefix(100).enumerated()),
+                                id: \.offset
+                            ) { index, track in
+                                CompactQueueRow(track: track, upcomingIndex: index)
+                                    .id("upcoming-\(index)-\(track.id)")
+                            }
                         }
-                        ForEach(
-                            Array(player.upcomingTracks.prefix(100).enumerated()),
-                            id: \.offset
-                        ) { index, track in
-                            CompactQueueRow(track: track, upcomingIndex: index)
+                    }
+                    .mask(
+                        LinearGradient(
+                            colors: [.black, .black, .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    // 面板出现时定位到当前播放曲目
+                    .onAppear {
+                        guard let id = player.currentTrack?.id else { return }
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            withAnimation(.easeOut(duration: 0.2)) {
+                                proxy.scrollTo("current-\(id)", anchor: .center)
+                            }
                         }
                     }
                 }
-                .mask(
-                    LinearGradient(
-                        colors: [.black, .black, .clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
             }
         }
         .padding(.top, 6)
@@ -2217,12 +2235,16 @@ private struct CompactQueueRow: View {
     let upcomingIndex: Int
     /// 已播放的曲目：点击直接切回，样式灰化。
     var isPlayed = false
+    /// 当前正在播放：高亮、不可点击跳转。
+    var isCurrent = false
 
     @EnvironmentObject private var player: PlayerService
 
     var body: some View {
         Button {
-            if isPlayed {
+            if isCurrent {
+                return
+            } else if isPlayed {
                 player.playQueuedTrack(track)
             } else {
                 player.jumpToUpcoming(at: upcomingIndex, matching: track.id)
@@ -2232,15 +2254,21 @@ private struct CompactQueueRow: View {
                 CachedAsyncImage(url: track.album.picUrl?.resizedImageURL(120), animated: false)
                     .frame(width: 46, height: 46)
                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .overlay {
+                        if isCurrent {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .stroke(Theme.accent, lineWidth: 2)
+                        }
+                    }
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(track.name)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.white.opacity(isPlayed ? 0.5 : 0.9))
+                        .foregroundStyle(isCurrent ? Theme.accent : .white.opacity(isPlayed ? 0.5 : 0.9))
                         .lineLimit(1)
                     Text(track.artistNames)
                         .font(.caption)
-                        .foregroundStyle(.white.opacity(isPlayed ? 0.3 : 0.48))
+                        .foregroundStyle(isCurrent ? Theme.accent.opacity(0.8) : .white.opacity(isPlayed ? 0.3 : 0.48))
                         .lineLimit(1)
                 }
 

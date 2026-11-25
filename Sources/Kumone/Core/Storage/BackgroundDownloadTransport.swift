@@ -171,9 +171,12 @@ final class BackgroundDownloadTransport: DownloadTransport {
     func start(resource: OfflineAudioResource, token: String, allowsMetered: Bool, resumeData: Data?) {
         let preferred = CDNHost.preferred(for: resource.url)
         var request = URLRequest(url: preferred)
+        // 只有「是否允许蜂窝」受用户设置控制。昂贵/受限网络必须放行：
+        // 之前把三者都绑在 allowsMetered 上，用户关掉流量下载后，即便在 WiFi 下
+        // 只要被系统判定为 expensive/constrained，任务就被永久挂起直到 240s 超时 -1001。
         request.allowsCellularAccess = allowsMetered
-        request.allowsExpensiveNetworkAccess = allowsMetered
-        request.allowsConstrainedNetworkAccess = allowsMetered
+        request.allowsExpensiveNetworkAccess = true
+        request.allowsConstrainedNetworkAccess = true
         request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         // 第三方音源的 CDN 防盗链策略各异：统一给浏览器 UA，但不带 Referer
         // （实测 music.163.com Referer 会让酷我/网易 CDN 触发防盗链，表现为超时）。

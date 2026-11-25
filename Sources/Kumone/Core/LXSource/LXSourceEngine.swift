@@ -30,7 +30,10 @@ struct LXSourceMeta: Codable, Hashable, Identifiable {
 /// 音源解析结果。
 struct LXResolvedURL {
     let url: URL
+    /// 命中的平台（kw/mg/wy 等），用于诊断与缓存标识。
     let sourceName: String
+    /// 音源显示名（如「溯音音源」），由管理器填入；引擎直调时为 nil。
+    var sourceLabel: String? = nil
 }
 
 enum LXSourceError: LocalizedError {

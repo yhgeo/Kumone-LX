@@ -220,6 +220,16 @@ final class LXSourceManager: ObservableObject {
             }
             // 网页/纯文本错误页：拒绝
             if contentType.contains("text/html") || contentType.contains("text/plain") { return nil }
+            // 识别「仅可在XX最新版播放」这类试听/提示音片段：
+            // Content-Range 里的总长度通常只有一百多 KB（几十秒），远小于整曲。
+            if let range = http.value(forHTTPHeaderField: "Content-Range"),
+               let slash = range.lastIndex(of: "/") {
+                let totalStr = range[range.index(after: slash)...]
+                if let total = Int64(totalStr.trimmingCharacters(in: .whitespaces)),
+                   total > 0, total < 400_000 {
+                    return nil
+                }
+            }
             return data.isEmpty ? nil : finalURL
         } catch {
             return nil
@@ -258,7 +268,7 @@ final class LXSourceManager: ObservableObject {
             if let finalURL = await verifyAudioURL(result.url) {
                 failedKeys.removeValue(forKey: key)  // 成功则移出黑名单
                 diag.log("音源", "✓ \(meta.name) key=\(key) platform=\(result.sourceName) 耗时\(String(format:"%.1f",elapsed))s host=\(finalURL.host() ?? "?") 验证通过")
-                return LXResolvedURL(url: finalURL, sourceName: result.sourceName)
+                return LXResolvedURL(url: finalURL, sourceName: result.sourceName, sourceLabel: meta.name)
             } else {
                 failedKeys[key] = Date()
                 diag.log("音源", "✗ \(meta.name) key=\(key) 返回URL验证失败 host=\(result.url.host() ?? "?") 加入冷却")
@@ -371,7 +381,7 @@ final class LXSourceManager: ObservableObject {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: true, elapsed: e))
                 diag.log("测试", "\(meta.name) \(q)(\(lxQ)) ✓ \(String(format:"%.1f",e))s platform=\(result.sourceName) host=\(finalURL.host() ?? "?")")
-                if firstOK == nil { firstOK = LXResolvedURL(url: finalURL, sourceName: result.sourceName) }
+                if firstOK == nil { firstOK = LXResolvedURL(url: finalURL, sourceName: result.sourceName, sourceLabel: meta.name) }
             } else {
                 let e = Date().timeIntervalSince(qStart)
                 qualityResults.append(QualityResult(quality: q, ok: false, elapsed: e))
