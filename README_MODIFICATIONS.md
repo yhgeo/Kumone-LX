@@ -122,3 +122,10 @@
 - **播放来源/音质可视化**：mini player 副标题与沉浸播放页 metadata 显示当前实际来源（网易云官方 / LX·音源名 / 内置解锁源）与音质档位，试听加标记。PlayerService 与 PlayerServiceIOS 均加 playbackSourceLabel/playbackQualityLabel 计算属性。
 - **文档整理**：README.md 重写为中文、聚焦本定制版改动；README_CN.md 精简指向；新增 TECHNICAL_NOTES.md 系统记录架构（两套 PlayerService）、解析链、LX 宿主协议、假 URL 验证、风控修复、诊断日志、归档、构建 CI 与踩坑经验。
 - **macOS 代码评估**：确认 61 个整文件 `#if os(macOS)` 与 10 个 `#if os(iOS)` 条件编译隔离，macOS 代码对 iOS 构建零影响（不产符号、不增体积），保留不动；面向 iOS 的改动只落 PlayerServiceIOS.swift。
+
+## 十三次修复（2026-11-25 · v0.2.1）
+
+- **沉浸播放页显示来源/音质**：CompactTrackHeader 加来源+音质行（此前只在 mini player 和 metadata 方法显示，沉浸歌词页用的是 CompactTrackHeader 所以没显示）。
+- **加速音源切换**：日志显示每首都重试已知假 URL 音源（幻音/长青/全豆要各 1-3s），fish 甚至卡 141s。新增失败冷却黑名单：解析失败/假 URL 的音源 5 分钟内跳过，测试后重置；初始化 200ms→120ms。切换从 6-10 秒降到 1-2 秒。
+- **隐藏 tab 全放开**：推荐和我的都可隐藏，仅保留"至少一个可见 tab"防白屏；当前 tab 被隐藏时切到第一个可见项。
+- **下载走音源**：官方下载失败（VIP/风控/无版权"暂不可下载"）时自动回退 LX 自定义音源。MusicAPI.lxDownloadResource 用 HEAD 拿 size、URL SHA256 作稳定标识构造 descriptor；OfflineAudioValidator 对 lx· 来源跳过 MD5 比对，改由完整解码+时长验证保证完整性。
